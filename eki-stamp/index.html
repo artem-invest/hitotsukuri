@@ -75,6 +75,15 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
 .sugg b{margin-right:8px}
 .sugg small{color:var(--muted);font-size:.75rem}
 .links{display:flex;gap:16px}
+.gridhead{font-family:var(--f);font-size:1rem;margin:18px 0 -6px;color:var(--muted)}
+.stamp.spot{border-radius:22%}
+.stamp.spot.on{box-shadow:inset 0 0 0 4px var(--paper),inset 0 0 0 5px var(--ink)}
+.spotpin{display:inline-block;transform:translate(-50%,-50%);background:var(--c);color:#fff;font:700 11px/1 system-ui,sans-serif;padding:4px 5px;border-radius:5px;border:2px solid #fff;white-space:nowrap}
+.drives{list-style:none;margin:6px 0 0;padding:0}
+.drives button{width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--line);padding:8px 0;display:grid;grid-template-columns:auto 1fr;gap:0 10px}
+.drives b{font-family:var(--f)}
+.drives span{text-align:right;font-variant-numeric:tabular-nums}
+.drives small{grid-column:1/-1;color:var(--muted);font-size:.75rem}
 .daynav{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:14px}
 .daynav input{flex:0 1 11em;text-align:center}
 .daynav button{width:40px;height:40px;border:1px solid var(--line);background:var(--paper);border-radius:10px;font-size:1.2rem}

@@ -6,11 +6,11 @@
 
 | 作品 | URL | ひとこと |
 |---|---|---|
-| 駅スタンプ帳 | https://artem-invest.github.io/hitotsukuri/eki-stamp/ | 駅の近く（300m）でGPSスタンプ。押した駅の路線が塗り絵になり、空きが「次に降りる駅」になる。Googleマップのタイムラインを読み込むと、道のりを地図で見られ、月ごとの移動距離が出る。PWA（インストール・オフライン・JSONでバックアップ） |
+| 駅スタンプ帳 | https://artem-invest.github.io/hitotsukuri/eki-stamp/ | 駅の近く（300m）でGPSスタンプ。押した駅の路線が塗り絵になり、空きが「次に降りる駅」になる。Googleマップのタイムラインを読み込むと、道のりを地図で見られ、月ごとの移動距離（高速／一般道も）が出て、SA・PA・道の駅にもスタンプ。PWA（インストール・オフライン・JSONでバックアップ） |
 | 高速道路IC当てクイズ | https://artem-invest.github.io/hitotsukuri/ic-quiz/ | 路線を選んで、IC・JCTの順番を当てる |
 | 焚き火タイマー | https://artem-invest.github.io/hitotsukuri/takibi-timer/ | ぱちぱち燃える焚き火を10分間眺める |
 | 旬の魚図鑑 | https://artem-invest.github.io/hitotsukuri/sashimi-calendar/ | 月ごとの旬の魚と、柵の選び方・刺身の食べ方 |
 
 どれもビルド不要のHTML/CSS/JavaScriptだけで動く。`main` ブランチがそのまま GitHub Pages で公開される。
 
-駅スタンプ帳の駅の位置：国土数値情報（鉄道データ）（国土交通省）を加工して作成。地図：地理院タイル。地図ライブラリ：Leaflet（BSD-2-Clause）
+駅スタンプ帳の駅の位置：国土数値情報（鉄道データ）（国土交通省）を加工して作成。地図：地理院タイル。地図ライブラリ：Leaflet（BSD-2-Clause）。高速道路：国土数値情報（高速道路時系列データ）（国土交通省）を加工して作成。SA・PA・道の駅：© OpenStreetMap contributors（`eki-stamp/roads.json` は ODbL）
