@@ -57,6 +57,23 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
 .empty{border:1.5px dashed var(--line);border-radius:12px;padding:20px;color:var(--muted);text-align:center;margin-top:16px}
 .nudge{display:block;width:100%;text-align:left;margin-top:14px;background:var(--paper);border:1.5px solid var(--accent);color:var(--accent);border-radius:10px;padding:8px 12px;font-weight:700;font-size:.85rem}
 
+.near{margin-top:14px}
+.near .big{width:100%;padding:12px;font-size:1.05rem}
+.near .big:disabled{opacity:.6}
+.warn{color:var(--accent);font-size:.85rem;margin:8px 0 0}
+.nearlist{list-style:none;margin:10px 0 0;padding:0;background:var(--paper);border:1px solid var(--line);border-radius:12px}
+.nearlist li{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.nearlist li:last-child{border-bottom:0}
+.nearlist li.in{background:color-mix(in srgb,var(--accent) 8%,transparent)}
+.nearlist b{font-family:var(--f);font-size:1.05rem;margin-right:8px}
+.nearlist small{display:block;color:var(--muted);font-size:.75rem;line-height:1.4}
+.nearlist button{flex:none}
+.nearlist button:disabled{background:var(--empty)}
+.sugg{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:4px}
+.sugg button{width:100%;text-align:left;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+.sugg b{margin-right:8px}
+.sugg small{color:var(--muted);font-size:.75rem}
+.links{display:flex;gap:16px}
 .add{margin-top:24px;background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
 .add h2,.card h2{font-size:1rem;margin:0 0 8px;font-family:var(--f)}
 .add .row{display:flex;flex-wrap:wrap;gap:8px}

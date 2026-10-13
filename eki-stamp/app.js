@@ -1,8 +1,9 @@
 // 駅スタンプ帳：画面と操作
 // データの流れ： IndexedDB（db.js）→ stations / visits の配列 → render() で画面を作り直す
 import * as db from "./db.js";
+import * as geo from "./geo.js";
 
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.1.0";
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
 // 朝刊の駅スタンプ帳から引き継いだ記録（2026-10-13時点）。初回起動のときだけ入れる
@@ -45,6 +46,7 @@ function hash(s) { let n = 0; for (const c of s) n = (n * 31 + c.charCodeAt(0)) 
 const inkOf = (id) => INKS[hash(id) % INKS.length];
 const tiltOf = (id) => (hash(id + "t") % 21) - 10; // -10〜+10度
 const HOW = { tap: "タップ", gps: "GPS", chokan: "朝刊から", import: "読み込み" };
+const meters = (d) => (d < 1000 ? `${Math.round(d / 10) * 10}m` : `${(d / 1000).toFixed(1)}km`);
 
 function toast(msg) {
   const t = $("#toast");
@@ -58,6 +60,8 @@ let stations = [];
 let visits = [];
 let meta = { lastExport: null, persisted: "?" };
 let tab = "stamps";
+let near = { state: "idle" }; // 近くの駅：idle / locating / done / error
+let master = null;            // 全国の駅データ（geo.loadMaster）
 try { tab = localStorage.getItem("eki.tab") || "stamps"; } catch {}
 
 const visitsOf = (id) => visits.filter((v) => v.stationId === id).sort((a, b) => a.at.localeCompare(b.at));
@@ -66,6 +70,20 @@ async function load() {
   [stations, visits] = await Promise.all([db.getAll("stations"), db.getAll("visits")]);
   meta.lastExport = await db.getMeta("lastExport");
   render();
+}
+
+// 位置の無い駅（朝刊から来た駅・手で足した駅）を、名前が1つに決まれば全国データと結びつける
+async function linkMaster() {
+  const changed = [];
+  for (const s of stations) {
+    if (s.gid) continue;
+    const hits = master.filter((m) => m.name === s.name);
+    if (hits.length !== 1) continue;
+    const c = geo.center(hits[0]);
+    Object.assign(s, { gid: hits[0].id, lines: hits[0].lines, lat: c.lat, lng: c.lng });
+    changed.push(["stations", s]);
+  }
+  await db.putMany(changed);
 }
 
 async function seedIfFirst() {
@@ -85,8 +103,9 @@ async function askPersist() {
 }
 
 /* ---------- 操作 ---------- */
-async function addVisit(station) {
-  const v = { id: uid("v"), stationId: station.id, at: new Date().toISOString(), how: "tap", lat: null, lng: null };
+async function addVisit(station, pos = null) {
+  const v = { id: uid("v"), stationId: station.id, at: new Date().toISOString(),
+    how: pos ? "gps" : "tap", lat: pos?.lat ?? null, lng: pos?.lng ?? null, acc: pos ? Math.round(pos.acc) : null };
   await db.put("visits", v);
   visits.push(v);
   toast(`${station.name} にスタンプを押しました`);
@@ -99,15 +118,58 @@ async function removeVisit(v) {
   render();
 }
 
-async function addStation(name, area) {
+// 全国データの駅 m に対応する手持ちの駅を返す。無ければ作る
+async function ensureStation(m) {
+  let s = stations.find((x) => x.gid === m.id);
+  if (s) return s;
+  const c = geo.center(m);
+  s = { id: m.id, gid: m.id, name: m.name, lines: m.lines, area: "", firstDate: today(), url: "", lat: c.lat, lng: c.lng, source: "master" };
+  await db.put("stations", s);
+  stations.push(s);
+  return s;
+}
+
+async function addStation(name, m = null) {
+  if (m) {
+    if (stations.some((x) => x.gid === m.id)) { toast(`${m.name} はもうあります`); return; }
+    await ensureStation(m);
+    toast(`${m.name} を追加しました`);
+    render();
+    return;
+  }
   name = name.trim().replace(/駅$/, "");
   if (!name) return;
   if (stations.some((s) => s.name === name)) { toast(`${name} はもうあります`); return; }
-  const s = { id: uid("u"), name, area: area.trim(), firstDate: today(), url: "", lat: null, lng: null, source: "manual" };
+  const s = { id: uid("u"), name, area: "", firstDate: today(), url: "", lat: null, lng: null, source: "manual" };
   await db.put("stations", s);
   stations.push(s);
   toast(`${name} を追加しました`);
   render();
+}
+
+/* ---------- 近くの駅（GPS） ---------- */
+const stampedToday = (s) => !!s && visitsOf(s.id).some((v) => new Date(v.at).toDateString() === new Date().toDateString());
+
+async function findNear() {
+  near = { state: "locating" };
+  render();
+  try {
+    const [m, pos] = await Promise.all([geo.loadMaster(), geo.locate()]);
+    master = m;
+    near = { state: "done", pos, list: geo.nearest(m, pos.lat, pos.lng, 3) };
+  } catch (e) {
+    const msg = e?.code === 1 ? "位置情報が許可されていません。スマホの設定で、このアプリ（Chrome）の位置情報を許可してください。"
+      : e?.code === 3 ? "位置が取れませんでした（時間切れ）。空が見える場所でもう一度どうぞ。"
+      : e?.code === 2 ? "位置が取れませんでした。位置情報がオンか確かめてください。"
+      : "駅データを読み込めませんでした。一度電波のある所で開いてください。";
+    near = { state: "error", msg };
+  }
+  render();
+}
+
+async function stampHere(m) {
+  const s = await ensureStation(m);
+  await addVisit(s, near.pos);
 }
 
 async function removeStation(s) {
@@ -186,14 +248,38 @@ function stampButton(s) {
     onclick: () => openSheet(s),
   },
     h("span", { class: "nm", text: s.name }),
-    s.area ? h("small", { text: s.area }) : null,
+    (s.area || s.lines) ? h("small", { text: s.area || s.lines.split("・")[0] }) : null,
     on ? h("small", { class: "dt", text: md(vs[0].at) }) : null,
     vs.length > 1 ? h("span", { class: "times", text: `×${vs.length}` }) : null,
   );
 }
 
+function renderNear() {
+  const box = h("section", { class: "near" });
+  box.append(h("button", { type: "button", class: "primary big", onclick: findNear,
+    disabled: near.state === "locating",
+    text: near.state === "locating" ? "現在地を確かめています…" : near.state === "done" ? "もう一度探す" : "近くの駅を探す（GPS）" }));
+  if (near.state === "error") box.append(h("p", { class: "warn", text: near.msg }));
+  if (near.state === "done") {
+    const { pos, list } = near;
+    if (pos.acc > geo.STAMP_RADIUS) box.append(h("p", { class: "warn", text: `位置の誤差が大きめです（±${meters(pos.acc)}）。少し待ってもう一度探すと正確になります。` }));
+    if (!list.length) box.append(h("p", { class: "muted", text: "5km以内に駅がありません。" }));
+    box.append(h("ol", { class: "nearlist" }, list.map((m) => {
+      const ok = m.dist <= geo.STAMP_RADIUS;
+      const done = stampedToday(stations.find((x) => x.gid === m.id));
+      return h("li", { class: ok ? "in" : "" },
+        h("div", {}, h("b", { text: m.name }), h("small", { text: `${meters(m.dist)}・${m.lines}` })),
+        ok
+          ? h("button", { type: "button", class: "primary", disabled: done, text: done ? "今日は押した" : "スタンプ",
+              onclick: async (e) => { e.currentTarget.disabled = true; await stampHere(m); } })
+          : h("span", { class: "muted", text: `あと${meters(m.dist - geo.STAMP_RADIUS)}` }));
+    })));
+  }
+  return box;
+}
+
 function renderStamps(main) {
-  main.append(backupNudge() || "");
+  main.append(backupNudge() || "", renderNear());
   if (!stations.length) {
     main.append(h("p", { class: "empty", text: "まだ駅がありません。下から駅を追加してください。" }));
   } else {
@@ -201,12 +287,22 @@ function renderStamps(main) {
     main.append(h("div", { class: "grid" }, list.map(stampButton)));
     main.append(h("p", { class: "hint", text: "駅をタップすると、スタンプを押したり記録を見たりできます。" }));
   }
-  const name = h("input", { name: "name", placeholder: "駅名（例：吉祥寺）", required: true, autocomplete: "off", enterkeyhint: "done" });
-  const area = h("input", { name: "area", placeholder: "区・市（任意）", autocomplete: "off" });
+  // 駅を追加：打つと全国の駅から候補が出る。候補に無い名前もそのまま足せる
+  const sugg = h("ul", { class: "sugg" });
+  const name = h("input", { name: "name", placeholder: "駅名（例：吉祥寺）", required: true, autocomplete: "off", enterkeyhint: "done",
+    oninput: async () => {
+      const q = name.value;
+      try { master ||= await geo.loadMaster(); } catch { return; }
+      if (name.value !== q) return;
+      sugg.replaceChildren(...geo.search(master, q).map((m) => h("li", {},
+        h("button", { type: "button", onclick: () => addStation(m.name, m) },
+          h("b", { text: m.name }), h("small", { text: m.lines })))));
+    } });
   main.append(h("form", {
     class: "add",
-    onsubmit: (e) => { e.preventDefault(); addStation(name.value, area.value); },
-  }, h("h2", { text: "駅を追加" }), h("div", { class: "row" }, name, area, h("button", { type: "submit", text: "追加" }))));
+    onsubmit: (e) => { e.preventDefault(); addStation(name.value); },
+  }, h("h2", { text: "駅を追加" }), h("div", { class: "row" }, name, h("button", { type: "submit", text: "追加" })), sugg,
+    h("p", { class: "muted", text: "候補をタップすると、位置つきで追加されます。" })));
 }
 
 function renderLog(main) {
@@ -247,7 +343,8 @@ function renderBackup(main) {
         h("li", { text: `保存：${persistText}` }),
         h("li", { text: `通信：${navigator.onLine ? "オンライン" : "オフライン（記録はできます）"}` }),
         h("li", { text: `起動のしかた：${matchMedia("(display-mode: standalone)").matches || navigator.standalone ? "ホーム画面のアプリ" : "ブラウザ"}` }),
-        h("li", { text: `版：${APP_VERSION}` }))),
+        h("li", { text: `版：${APP_VERSION}` })),
+      h("p", { class: "muted", text: "駅の位置：国土数値情報（鉄道データ N02-24）（国土交通省）を加工して作成" })),
     h("section", { class: "card" },
       h("h2", { text: "ホーム画面に追加" }),
       h("p", { text: "iPhone：Safariの共有ボタン →「ホーム画面に追加」。Android：Chromeのメニュー →「ホーム画面に追加」。" }),
@@ -269,7 +366,7 @@ function openSheet(s) {
       h("header", {},
         h("h2", { text: s.name }),
         h("button", { type: "button", class: "close", "aria-label": "閉じる", text: "×", onclick: () => dlg.close() })),
-      h("p", { class: "muted", text: [s.area, s.firstDate ? `${md(s.firstDate)}に追加` : ""].filter(Boolean).join("・") }),
+      h("p", { class: "muted", text: [s.area, s.lines, s.firstDate ? `${md(s.firstDate)}に追加` : ""].filter(Boolean).join("・") }),
       h("button", { type: "button", class: "primary big", text: "今日ここに来た（スタンプ）",
         onclick: async () => { await addVisit(s); draw(); } }),
       vs.length
@@ -279,10 +376,13 @@ function openSheet(s) {
                 if (undo.dataset.armed) { await removeVisit(v); draw(); return; }
                 undo.dataset.armed = "1"; undo.textContent = "本当に？";
               } });
-            return h("li", {}, h("span", { text: `${ymd(v.at)}（${HOW[v.how] || ""}）` }), undo);
+            const acc = v.how === "gps" && v.acc != null ? ` ±${meters(v.acc)}` : "";
+            return h("li", {}, h("span", { text: `${ymd(v.at)}（${HOW[v.how] || ""}${acc}）` }), undo);
           }))
         : h("p", { class: "muted", text: "まだスタンプはありません。" }),
-      s.url ? h("p", {}, h("a", { href: s.url, target: "_blank", rel: "noopener", text: "駅のページ" })) : null,
+      h("p", { class: "links" },
+        s.lat != null ? h("a", { href: `https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`, target: "_blank", rel: "noopener", text: "地図で見る" }) : null,
+        s.url ? h("a", { href: s.url, target: "_blank", rel: "noopener", text: "駅のページ" }) : null),
       h("div", { class: "foot" }, delBtn)));
   };
   draw();
@@ -302,7 +402,15 @@ addEventListener("offline", syncOnline);
 syncOnline();
 
 // サービスワーカー：一度開いたら、電波がなくても開けるようにする係
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(() => {});
+if ("serviceWorker" in navigator) {
+  // 新しい版の門番が入れ替わったら1回だけ読み直す（初回の取り付けでは読み直さない）
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (hadController && !reloaded) { reloaded = true; location.reload(); }
+  });
+  navigator.serviceWorker.register("./sw.js").catch(() => {});
+}
 
 (async () => {
   try {
@@ -314,4 +422,6 @@ if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").ca
   }
   meta.persisted = await askPersist().catch(() => "unsupported");
   if (tab === "backup") render();
+  try { master = await geo.loadMaster(); await linkMaster(); render(); } catch {}
+  if (await geo.permitted()) findNear(); // 許可済みなら、開いたときに自動で探す
 })();
