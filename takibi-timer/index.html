@@ -1,0 +1,803 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>焚き火タイマー</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@500;700&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap">
+<style>
+/* layout: 夜の森いっぱいにcanvasの焚き火。左上に大きな残り時間、左下に操作。火は中央やや下。夜景を貫く単一テーマ */
+:root {
+  --night: #07090e;
+  --soot: #14100d;
+  --ash: #eadcc6;
+  --ember: #e8671f;
+  --flame: #ffb347;
+  --dim: #a8998a;
+  --line: rgba(234, 220, 198, 0.26);
+  --font-display: "Shippori Mincho", "Hiragino Mincho ProN", "Yu Mincho", serif;
+  --font-body: "Zen Kaku Gothic New", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  --g: 1;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  background: var(--night);
+  color: var(--ash);
+  font-family: var(--font-body);
+  overflow: hidden;
+}
+#fire {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: var(--night);
+}
+.ui {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: calc(env(safe-area-inset-top, 0px) + 22px) 20px calc(env(safe-area-inset-bottom, 0px) + 22px);
+  pointer-events: none;
+}
+.ui > * { pointer-events: auto; }
+.top { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; min-width: 0; }
+.eyebrow {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.22em;
+  color: var(--dim);
+}
+.clock {
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: clamp(64px, 20vw, 132px);
+  line-height: 1;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--ash);
+  text-shadow: 0 0 calc(var(--g) * 36px) rgba(255, 140, 50, calc(var(--g) * 0.5));
+}
+.burn {
+  width: min(100%, 320px);
+  height: 2px;
+  background: var(--line);
+  margin-top: 6px;
+}
+.burn i {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: var(--flame);
+  transform-origin: left center;
+}
+.phase {
+  margin: 8px 0 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ash);
+  text-wrap: balance;
+  max-width: 24em;
+}
+.controls {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  width: min(100%, 420px);
+}
+.btn {
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  min-height: 48px;
+  padding: 10px 14px;
+  color: var(--ash);
+  background: rgba(10, 8, 7, 0.55);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--flame); }
+.btn:focus-visible { outline: 2px solid var(--flame); outline-offset: 2px; }
+.btn[aria-pressed="false"] { color: var(--dim); }
+.btn.primary {
+  grid-column: 1 / -1;
+  font-weight: 700;
+  font-size: 17px;
+  min-height: 54px;
+  color: #1a0d06;
+  background: var(--ember);
+  border-color: var(--ember);
+}
+.btn.primary:hover { background: var(--flame); border-color: var(--flame); }
+[hidden] { display: none !important; }
+</style>
+
+<canvas id="fire" role="img" aria-label="夜の森の焚き火。タイマーが進むと炎が小さくなり、熾火になる"></canvas>
+<main class="ui">
+  <header class="top">
+    <p class="eyebrow">焚き火タイマー・10分</p>
+    <div class="clock" id="clock" role="timer">10:00</div>
+    <div class="burn" aria-hidden="true"><i id="burn"></i></div>
+    <p class="phase" id="phase">ぱちぱちと燃える焚き火を、10分間眺めます。</p>
+  </header>
+  <footer class="controls">
+    <button class="btn primary" id="go" type="button">スタート</button>
+    <button class="btn" id="reset" type="button">リセット</button>
+    <button class="btn" id="snd" type="button" aria-pressed="true">音 オン</button>
+    <button class="btn" id="fs" type="button">全画面</button>
+  </footer>
+</main>
+
+<script>
+(function () {
+  var cv = document.getElementById('fire');
+  var ctx = cv.getContext('2d');
+  var TOTAL = 600;
+  var reduce = false;
+  try { reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) {}
+  var MOTION = reduce ? 0.55 : 1;
+
+  var W = 0, H = 0, dpr = 1, u = 0, s = 1, cx = 0, by = 0, horizon = 0;
+  var stars = [], pines = [], trunks = [], canopy = [], specks = [], stones = [], logs = [], sticks = [], coals = [];
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function rrectOn(g, x, y, w, h, r) {
+    g.beginPath();
+    if (g.roundRect) g.roundRect(x, y, w, h, r); else g.rect(x, y, w, h);
+  }
+
+  /* 薪の質感(樹皮・割り木・炭化)をあらかじめ描いておく */
+  function makeTex(len, th, kind, cap) {
+    var capW = cap ? th * 0.2 : 0;
+    var c = document.createElement('canvas');
+    c.width = Math.ceil((len + capW) * dpr); c.height = Math.ceil(th * dpr);
+    var g = c.getContext('2d'); g.scale(dpr, dpr);
+    var pal = { bark: ['#52392a', '#33231a', '#150d09'], split: ['#dcb77c', '#a2733f', '#3f2814'], char: ['#2c1f17', '#100a07', '#050302'] }[kind];
+    var i, n = Math.round(len / 2.5);
+    g.save();
+    rrectOn(g, 0, 0, len, th, th * 0.3); g.clip();
+    var gr = g.createLinearGradient(0, 0, 0, th);
+    gr.addColorStop(0, pal[0]); gr.addColorStop(0.45, pal[1]); gr.addColorStop(1, pal[2]);
+    g.fillStyle = gr; g.fillRect(0, 0, len, th);
+    for (i = 0; i < n; i++) {
+      var y = Math.random() * th, x0 = Math.random() * len, l = len * (0.05 + Math.random() * 0.32);
+      var dark = Math.random() < 0.7;
+      g.strokeStyle = dark ? 'rgba(0,0,0,' + (0.15 + Math.random() * 0.35) + ')' : 'rgba(255,215,160,' + (0.05 + Math.random() * 0.12) + ')';
+      g.lineWidth = 0.5 + Math.random() * 1.5;
+      g.beginPath(); g.moveTo(x0, y);
+      g.quadraticCurveTo(x0 + l / 2, y + (Math.random() - 0.5) * th * 0.12, x0 + l, y + (Math.random() - 0.5) * th * 0.1);
+      g.stroke();
+    }
+    for (i = 0; i < n / 4; i++) {
+      g.fillStyle = 'rgba(0,0,0,' + (0.1 + Math.random() * 0.25) + ')';
+      g.beginPath(); g.ellipse(Math.random() * len, Math.random() * th, th * (0.05 + Math.random() * 0.2), th * (0.03 + Math.random() * 0.1), 0, 0, 6.283); g.fill();
+    }
+    if (kind !== 'split') {
+      for (i = 0; i < 5; i++) {
+        g.fillStyle = 'rgba(4,2,1,' + (0.35 + Math.random() * 0.3) + ')';
+        g.beginPath(); g.ellipse(Math.random() * len, Math.random() * th, th * rand(0.2, 0.7), th * rand(0.1, 0.3), 0, 0, 6.283); g.fill();
+      }
+    } else {
+      for (i = 0; i < 4; i++) {
+        g.fillStyle = 'rgba(30,15,5,' + (0.25 + Math.random() * 0.25) + ')';
+        g.beginPath(); g.ellipse(Math.random() * len, th * rand(0.5, 1), th * rand(0.3, 0.9), th * rand(0.1, 0.25), 0, 0, 6.283); g.fill();
+      }
+    }
+    g.restore();
+    if (cap) {
+      var ex = len, ey = th / 2, rx = capW, ry = th * 0.5;
+      g.fillStyle = kind === 'char' ? '#1b120d' : '#c79d66';
+      g.beginPath(); g.ellipse(ex, ey, rx, ry, 0, 0, 6.283); g.fill();
+      for (var r = 0.88; r > 0.1; r -= 0.16) {
+        g.strokeStyle = 'rgba(80,48,22,' + (0.3 + Math.random() * 0.3) + ')'; g.lineWidth = 0.8;
+        g.beginPath(); g.ellipse(ex + rand(-1, 1), ey + rand(-1, 1), rx * r, ry * r, 0, 0, 6.283); g.stroke();
+      }
+      g.strokeStyle = 'rgba(28,16,9,0.85)'; g.lineWidth = 1.6;
+      g.beginPath(); g.ellipse(ex, ey, rx, ry, 0, 0, 6.283); g.stroke();
+    }
+    return c;
+  }
+  function mkLog(px, py, lr, tr, ang, kind, cap, layer) {
+    var len = lr * u, th = tr * u;
+    var o = { x: cx + px * u, y: by + py * u, len: len, th: th, ang: ang, layer: layer, tex: makeTex(len, th, kind, cap), seed: Math.random() * 10, cracks: [] };
+    for (var k = 0; k < 9; k++) o.cracks.push({ x: rand(0.06, 0.94) * len, y: rand(0.25, 0.75) * th, l: th * rand(0.25, 0.6), a: rand(-0.9, 0.9), ph: Math.random() * 10 });
+    return o;
+  }
+
+  function resize() {
+    var i;
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    u = Math.min(W * 0.92, H * 0.6);
+    s = u / 420;
+    cx = W / 2; by = H * 0.74; horizon = H * 0.56;
+    stars = [];
+    for (i = 0; i < 70; i++) stars.push({ x: Math.random() * W, y: Math.random() * horizon * 0.9, r: rand(0.5, 1.3), ph: Math.random() * 10 });
+    /* 遠くの杉林 */
+    pines = [];
+    var n = Math.max(14, Math.round(W / 34));
+    for (i = 0; i < n; i++) pines.push({ x: (i + rand(-0.35, 0.35)) / (n - 1) * (W + 80) - 40, h: rand(0.12, 0.26) * H * (0.75 + 0.5 * Math.pow(Math.sin(i * 1.7), 2)), w: rand(0.5, 0.85), tiers: 5 + (Math.random() * 3 | 0) });
+    /* 近くの立ち木(幹)と、上を覆う枝葉 */
+    trunks = [];
+    var nt = W < 600 ? 5 : 9, sc = Math.max(0.8, Math.min(W, H) / 450);
+    for (i = 0; i < nt; i++) {
+      var depth = rand(0.45, 1), grain = [];
+      for (var k = 0; k < 10; k++) grain.push({ f: Math.random(), a: Math.random() });
+      trunks.push({ x: (i + 0.5 + rand(-0.3, 0.3)) / nt * W, w: rand(11, 22) * (0.6 + 0.6 * depth) * sc, depth: depth, lean: rand(-0.02, 0.02), grain: grain });
+    }
+    canopy = [];
+    for (i = 0; i < 16; i++) canopy.push({ x: rand(-20, W + 20), y: rand(-30, H * 0.09), rx: rand(40, 120), ry: rand(22, 58) });
+    /* 地面の枯れ葉・小石 */
+    specks = [];
+    for (i = 0; i < 160; i++) specks.push({ x: rand(0, W), y: rand(horizon + 8, H), r: rand(0.7, 2) });
+    stones = [];
+    for (i = 0; i < 11; i++) {
+      var ang = i / 11 * 6.283 + rand(-0.15, 0.15), rx = u * rand(0.03, 0.055);
+      stones.push({ x: cx + Math.cos(ang) * u * rand(0.44, 0.5), y: by + u * 0.05 + Math.sin(ang) * u * 0.1, rx: rx, ry: rx * rand(0.55, 0.7), back: Math.sin(ang) < -0.05 });
+    }
+    /* 薪の山 */
+    logs = [
+      mkLog(-0.02, -0.035, 0.40, 0.07, 0.03, 'char', false, 'back'),
+      mkLog(0.07, -0.015, 0.34, 0.06, 0.45, 'bark', false, 'back'),
+      mkLog(-0.17, 0.0, 0.5, 0.045, -0.62, 'split', false, 'front'),
+      mkLog(0.15, 0.045, 0.40, 0.09, -0.04, 'bark', true, 'front'),
+      mkLog(-0.15, 0.058, 0.34, 0.07, 0.1, 'char', false, 'front')
+    ];
+    sticks = [
+      { x: -0.03, y: 0.03, l: 0.2, a: -0.12, t: 0.012 }, { x: 0.0, y: 0.035, l: 0.16, a: 0.18, t: 0.01 },
+      { x: 0.04, y: 0.03, l: 0.22, a: 0.1, t: 0.011 }, { x: -0.07, y: 0.04, l: 0.14, a: -0.35, t: 0.01 }, { x: 0.09, y: 0.04, l: 0.13, a: 0.32, t: 0.01 }
+    ];
+    coals = [];
+    for (var q = 0; q < 46; q++) coals.push({ dx: (Math.random() + Math.random() - 1) * 0.3, dy: rand(-0.012, 0.03), r: rand(1.6, 4.2), ph: Math.random() * 10 });
+  }
+
+  /* 炎のスプライト(寿命に沿って白→淡い黄→橙→赤→暗赤。写真に合わせて黄色を長めに) */
+  var NS = 24, sprites = [];
+  var stops = [[0, [255, 252, 232]], [0.2, [255, 232, 140]], [0.45, [255, 175, 58]], [0.72, [232, 100, 24]], [0.9, [125, 38, 12]], [1, [48, 10, 5]]];
+  function colOf(st, t) {
+    for (var i = 1; i < st.length; i++) {
+      if (t <= st[i][0]) {
+        var a = st[i - 1], b = st[i], k = (t - a[0]) / (b[0] - a[0]);
+        return a[1].map(function (v, j) { return Math.round(v + (b[1][j] - v) * k); });
+      }
+    }
+    return st[st.length - 1][1];
+  }
+  function makeSprites(st, mid) {
+    var arr = [];
+    for (var i = 0; i < NS; i++) {
+      var c = colOf(st, i / (NS - 1));
+      var sc = document.createElement('canvas'); sc.width = sc.height = 64;
+      var g2 = sc.getContext('2d');
+      var gr = g2.createRadialGradient(32, 32, 0, 32, 32, 32);
+      gr.addColorStop(0, 'rgba(' + c + ',1)');
+      gr.addColorStop(0.4, 'rgba(' + c + ',' + mid + ')');
+      gr.addColorStop(1, 'rgba(' + c + ',0)');
+      g2.fillStyle = gr; g2.fillRect(0, 0, 64, 64);
+      arr.push(sc);
+    }
+    return arr;
+  }
+  sprites = makeSprites(stops, 0.55);
+  var sprites2 = makeSprites([[0, [90, 130, 255]], [0.35, [190, 215, 255]], [0.65, [255, 225, 170]], [1, [255, 140, 50]]], 0.5);
+  var smokeSpr = document.createElement('canvas'); smokeSpr.width = smokeSpr.height = 64;
+  (function () {
+    var g4 = smokeSpr.getContext('2d');
+    var gs = g4.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gs.addColorStop(0, 'rgba(175,150,135,0.5)'); gs.addColorStop(1, 'rgba(175,150,135,0)');
+    g4.fillStyle = gs; g4.fillRect(0, 0, 64, 64);
+  })();
+
+  /* 状態 */
+  var state = 'idle'; // idle / running / paused / done
+  var remaining = TOTAL * 1000, endAt = 0;
+  var fS = 1, time = 0, last = 0, accF = 0, accS = 0, accB = 0, accM = 0, accW = 0, nextPop = 0, lastSec = -1, lastPhase = '';
+  var parts = [], sparks = [], smoke = [];
+
+  function ease(x) { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); }
+  function flameLevel(r) { return r >= 180 ? 1 : (r <= 12 ? 0 : ease((r - 12) / 168)); }
+
+  /* 風と炎の舌(4本それぞれが別のリズムで伸び縮み・傾く) */
+  var sway = 0, hgt = 1;
+  var tg = [{ x: -0.1, w: 1.0, h: 0.8, lean: 0 }, { x: -0.04, w: 1.3, h: 0.8, lean: 0 }, { x: 0.03, w: 1.3, h: 0.8, lean: 0 }, { x: 0.09, w: 0.9, h: 0.8, lean: 0 }];
+  function dyn(now) {
+    var k;
+    sway = 0.9 * Math.sin(now * 0.0013) + 0.6 * Math.sin(now * 0.0031 + 1.3) + 0.3 * Math.sin(now * 0.0079 + 4.1);
+    var surge = Math.max(0, Math.sin(now * 0.00053 + 1) * Math.sin(now * 0.00131 + 2));
+    hgt = 1 + 0.2 * Math.sin(now * 0.0021) + 0.14 * Math.sin(now * 0.0047 + 2) + 0.08 * Math.sin(now * 0.0113 + 0.7) + 0.4 * surge * surge;
+    for (k = 0; k < tg.length; k++) {
+      tg[k].h = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(now * (0.0026 + k * 0.0009) + k * 2.3)) + 0.18 * Math.sin(now * 0.009 + k * 5);
+      tg[k].lean = Math.sin(now * (0.0019 + k * 0.0007) + k * 1.9);
+    }
+  }
+  function pickTongue() {
+    var r = Math.random() * 4.5, k = 0, acc = tg[0].w;
+    while (r > acc && k < tg.length - 1) { k++; acc += tg[k].w; }
+    return k;
+  }
+
+  /* 粒子 */
+  function spawnFlame(f) {
+    var k = pickTongue(), tn = tg[k];
+    var h = (0.5 + 0.5 * f) * hgt * tn.h;
+    var g = Math.random() + Math.random() - 1;
+    parts.push({
+      x: cx + tn.x * u * (0.5 + 0.5 * f) + g * u * 0.07 * (0.5 + 0.5 * f) * tn.w + sway * s * 0.6,
+      y: by - u * 0.012 - Math.random() * u * 0.012,
+      vx: (Math.random() - 0.5) * 0.25 * s,
+      vy: -(3.2 + Math.random() * 2.0) * s * h,
+      age: 0,
+      max: (40 + Math.random() * 30) * (0.5 + 0.5 * f) * (0.75 + 0.25 * h),
+      size: u * (0.075 + Math.random() * 0.06) * (0.45 + 0.55 * f) * (0.8 + 0.2 * tn.w),
+      seed: Math.random() * 100, k: k, cs: (Math.random() * 7 - 5) | 0, b: 0, w: 0, ve: 0
+    });
+  }
+  function spawnBase(f) {
+    var g = Math.random() + Math.random() - 1;
+    parts.push({
+      x: cx + g * u * 0.08 * (0.5 + 0.5 * f) + sway * s * 0.3,
+      y: by - u * 0.01 - Math.random() * u * 0.01,
+      vx: 0, vy: -(0.8 + Math.random() * 0.8) * s * (0.5 + 0.5 * f),
+      age: 0, max: 14 + Math.random() * 10,
+      size: u * (0.06 + Math.random() * 0.035) * (0.4 + 0.6 * f),
+      seed: Math.random() * 100, k: 1, cs: 0, b: 1, w: 0, ve: 0
+    });
+  }
+  /* 炎の上でひらひらとなびく細い炎のリボン */
+  function spawnWisp(f) {
+    var k = pickTongue(), tn = tg[k];
+    parts.push({
+      x: cx + tn.x * u * (0.5 + 0.5 * f) + sway * s * 2,
+      y: by - u * (0.1 + 0.22 * f * hgt * tn.h),
+      vx: 0, vy: -(1.6 + Math.random() * 1.4) * s * hgt * (0.5 + 0.5 * f),
+      age: 0, max: 45 + Math.random() * 25,
+      size: u * (0.05 + Math.random() * 0.035) * (0.5 + 0.5 * f),
+      seed: Math.random() * 100, k: k, cs: 3, b: 0, w: 1, ve: 0
+    });
+  }
+  function spawnSpark(f, burst) {
+    sparks.push({
+      x: cx + (Math.random() - 0.5) * u * 0.14 * (0.4 + f),
+      y: by - u * 0.05,
+      vx: (Math.random() - 0.5) * (burst ? 2.2 : 1.2) * s,
+      vy: -(1.6 + Math.random() * (burst ? 3.6 : 2.4)) * s,
+      age: 0, max: 70 + Math.random() * 90, seed: Math.random() * 10
+    });
+  }
+  function step(dt) {
+    var f = fS;
+    accF += 9 * f * dt * MOTION;
+    while (accF >= 1) { accF -= 1; if (parts.length < 1000) spawnFlame(f); }
+    accB += 1.6 * f * dt * MOTION;
+    while (accB >= 1) { accB -= 1; if (parts.length < 1000) spawnBase(f); }
+    accW += 0.45 * f * dt * MOTION;
+    while (accW >= 1) { accW -= 1; if (parts.length < 1000) spawnWisp(f); }
+    accS += (0.16 * f + 0.015) * dt * MOTION;
+    while (accS >= 1) { accS -= 1; spawnSpark(f, false); }
+    accM += (0.05 + 0.12 * f) * dt * MOTION;
+    while (accM >= 1) {
+      accM -= 1;
+      if (smoke.length < 80) smoke.push({ x: cx + sway * u * 0.03 + rand(-0.04, 0.04) * u, y: by - u * (0.1 + 0.3 * f * hgt), vx: 0, vy: -rand(0.5, 0.9) * s, age: 0, max: rand(130, 210), size: u * rand(0.05, 0.08), seed: Math.random() * 10 });
+    }
+    var j = 0, i, p;
+    for (i = 0; i < parts.length; i++) {
+      p = parts[i]; p.age += dt;
+      if (p.age >= p.max) continue;
+      var t = p.age / p.max;
+      p.vy *= Math.pow(0.988, dt);
+      var lat = (sway * 0.5 + tg[p.k].lean * 0.5) * s * (0.1 + 1.3 * t) * 0.8 * (p.w ? 2.2 : 1);
+      p.ve = p.vx + lat;
+      p.x += (p.ve + Math.sin(time * 0.004 + p.seed + p.age * 0.12) * 0.35 * s * (0.4 + t)) * dt + (cx - p.x) * 0.012 * dt;
+      p.y += p.vy * dt;
+      parts[j++] = p;
+    }
+    parts.length = j;
+    j = 0;
+    for (i = 0; i < smoke.length; i++) {
+      p = smoke[i]; p.age += dt;
+      if (p.age >= p.max) continue;
+      p.x += (sway * 0.35 * s + Math.sin(time * 0.0012 + p.seed) * 0.25 * s) * dt;
+      p.y += p.vy * dt;
+      smoke[j++] = p;
+    }
+    smoke.length = j;
+    j = 0;
+    for (i = 0; i < sparks.length; i++) {
+      p = sparks[i]; p.age += dt;
+      if (p.age >= p.max) continue;
+      p.vy *= Math.pow(0.992, dt);
+      p.x += (p.vx + sway * 0.25 * s + Math.sin(time * 0.003 + p.seed * 3) * 0.35 * s) * dt;
+      p.y += p.vy * dt;
+      sparks[j++] = p;
+    }
+    sparks.length = j;
+  }
+
+  /* 描画パーツ */
+  function drawLogO(o, L, heat) {
+    var th = o.th, len = o.len, k;
+    ctx.save();
+    ctx.translate(o.x, o.y); ctx.rotate(o.ang);
+    ctx.drawImage(o.tex, -len / 2, -th / 2, o.tex.width / dpr, th);
+    ctx.globalCompositeOperation = 'lighter';
+    var top = ctx.createLinearGradient(0, -th / 2, 0, th * 0.15);
+    top.addColorStop(0, 'rgba(255,150,60,' + (0.42 * L) + ')'); top.addColorStop(1, 'rgba(255,100,30,0)');
+    ctx.fillStyle = top; rrectOn(ctx, -len / 2, -th / 2, len, th, th * 0.3); ctx.fill();
+    var gl = ctx.createLinearGradient(0, -th / 2, 0, th / 2);
+    gl.addColorStop(0, 'rgba(255,120,40,' + (0.03 * heat) + ')');
+    gl.addColorStop(0.65, 'rgba(255,90,20,' + (0.14 * heat) + ')');
+    gl.addColorStop(1, 'rgba(255,70,10,' + (0.5 * heat) + ')');
+    ctx.fillStyle = gl; rrectOn(ctx, -len / 2, -th / 2, len, th, th * 0.3); ctx.fill();
+    ctx.lineWidth = Math.max(1, th * 0.035);
+    for (k = 0; k < o.cracks.length; k++) {
+      var c = o.cracks[k];
+      var a = 0.5 + 0.5 * Math.sin(time * 0.004 + c.ph * 3);
+      ctx.strokeStyle = 'rgba(255,' + (110 + 70 * a | 0) + ',40,' + ((0.2 + 0.65 * a) * heat) + ')';
+      var x0 = c.x - len / 2, y0 = c.y - th / 2;
+      ctx.beginPath(); ctx.moveTo(x0, y0);
+      ctx.lineTo(x0 + Math.cos(c.a) * c.l * 0.5 + c.l * 0.15, y0 + Math.sin(c.a) * c.l * 0.5);
+      ctx.lineTo(x0 + Math.cos(c.a + 0.5) * c.l, y0 + Math.sin(c.a + 0.5) * c.l * 0.8);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function drawStick(st, L, heat) {
+    var bx = cx + st.x * u, bY = by + st.y * u, l = st.l * u, tw = Math.max(1.5, st.t * u);
+    var tx = bx + Math.sin(st.a) * l, ty = bY - Math.cos(st.a) * l;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#2d1e13'; ctx.lineWidth = tw;
+    ctx.beginPath(); ctx.moveTo(bx, bY); ctx.lineTo(tx, ty); ctx.stroke();
+    ctx.strokeStyle = 'rgba(205,160,100,' + (0.25 + 0.4 * L) + ')'; ctx.lineWidth = tw * 0.5;
+    ctx.beginPath(); ctx.moveTo(bx, bY); ctx.lineTo(tx, ty); ctx.stroke();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = 'rgba(255,120,40,' + (0.3 * heat) + ')'; ctx.lineWidth = tw * 0.8;
+    ctx.beginPath(); ctx.moveTo(bx, bY); ctx.lineTo(tx, ty); ctx.stroke();
+    ctx.globalAlpha = Math.min(1, 0.55 * heat);
+    ctx.drawImage(sprites[6], tx - tw * 2, ty - tw * 2, tw * 4, tw * 4);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  function drawStone(st, L) {
+    ctx.fillStyle = '#1c1b19';
+    ctx.beginPath(); ctx.ellipse(st.x, st.y, st.rx, st.ry, 0, 0, 6.283); ctx.fill();
+    ctx.fillStyle = '#2a2927';
+    ctx.beginPath(); ctx.ellipse(st.x, st.y - st.ry * 0.18, st.rx * 0.85, st.ry * 0.7, 0, 0, 6.283); ctx.fill();
+    ctx.globalCompositeOperation = 'lighter';
+    var fall = Math.max(0, 1 - Math.abs(st.x - cx) / (u * 0.6));
+    ctx.fillStyle = 'rgba(255,135,55,' + (0.4 * L * (0.4 + 0.6 * fall)) + ')';
+    ctx.beginPath(); ctx.ellipse(st.x, st.y - st.ry * 0.3, st.rx * 0.8, st.ry * 0.5, 0, 0, 6.283); ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  function drawTrunk(tr, L) {
+    var yb = horizon + H * 0.07, yt = -20;
+    var x0b = tr.x - tr.w / 2, x1b = tr.x + tr.w / 2, x0t = tr.x + tr.lean * H - tr.w * 0.36, x1t = tr.x + tr.lean * H + tr.w * 0.36;
+    var gI;
+    ctx.fillStyle = tr.depth < 0.7 ? '#0a0b0f' : '#110c09';
+    ctx.beginPath(); ctx.moveTo(x0b, yb); ctx.lineTo(x0t, yt); ctx.lineTo(x1t, yt); ctx.lineTo(x1b, yb); ctx.closePath(); ctx.fill();
+    ctx.save(); ctx.clip();
+    for (gI = 0; gI < tr.grain.length; gI++) {
+      var gr = tr.grain[gI];
+      ctx.strokeStyle = 'rgba(0,0,0,' + (0.25 + 0.3 * gr.a) + ')'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x0b + gr.f * (x1b - x0b), yb); ctx.lineTo(x0t + gr.f * (x1t - x0t), yt); ctx.stroke();
+    }
+    ctx.globalCompositeOperation = 'lighter';
+    var fall = Math.max(0, 1 - Math.abs(tr.x - cx) / (W * 0.8)), a = 0.5 * L * fall * tr.depth;
+    var vg = ctx.createLinearGradient(0, yb, 0, yb - (yb - yt) * 0.75);
+    vg.addColorStop(0, 'rgba(255,135,55,' + a + ')'); vg.addColorStop(1, 'rgba(255,135,55,0)');
+    ctx.fillStyle = vg; ctx.fillRect(x0b - 4, yt, tr.w + 8 + Math.abs(tr.lean * H), yb - yt);
+    var right = tr.x > cx;
+    var hg = ctx.createLinearGradient(right ? x0b : x1b, 0, right ? x1b : x0b, 0);
+    hg.addColorStop(0, 'rgba(255,150,70,' + (a * 0.9) + ')'); hg.addColorStop(0.6, 'rgba(255,150,70,0)');
+    ctx.fillStyle = hg; ctx.fillRect(x0b - 4, yb - (yb - yt) * 0.7, tr.w + 8 + Math.abs(tr.lean * H), (yb - yt) * 0.7);
+    ctx.restore();
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  function render(L, ep) {
+    var i, p, t, a;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    /* 夜空と地面 */
+    var sky = ctx.createLinearGradient(0, 0, 0, horizon);
+    sky.addColorStop(0, '#04060b'); sky.addColorStop(1, '#101521');
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, W, horizon + 2);
+    var gnd = ctx.createLinearGradient(0, horizon, 0, H);
+    gnd.addColorStop(0, '#0c0e12'); gnd.addColorStop(1, '#0a0806');
+    ctx.fillStyle = gnd; ctx.fillRect(0, horizon, W, H - horizon);
+    for (i = 0; i < stars.length; i++) {
+      p = stars[i];
+      a = (0.35 + 0.35 * Math.sin(time * 0.0015 + p.ph)) * (1 - 0.75 * L);
+      ctx.fillStyle = 'rgba(235,235,255,' + a + ')';
+      ctx.fillRect(p.x, p.y, p.r, p.r);
+    }
+    /* 遠くの杉林 */
+    ctx.fillStyle = '#070a10';
+    for (i = 0; i < pines.length; i++) {
+      p = pines[i];
+      var pw = p.h * 0.36 * p.w;
+      for (var tier = 0; tier < p.tiers; tier++) {
+        var fr = tier / p.tiers;
+        var ty = horizon + 4 - p.h * fr * 0.85, th2 = p.h * 0.3, tw = pw * (1.05 - fr * 0.85);
+        ctx.beginPath(); ctx.moveTo(p.x - tw, ty); ctx.lineTo(p.x - tw * 0.3, ty - th2 * 0.45); ctx.lineTo(p.x, ty - th2); ctx.lineTo(p.x + tw * 0.3, ty - th2 * 0.45); ctx.lineTo(p.x + tw, ty); ctx.closePath(); ctx.fill();
+      }
+    }
+    var hz = ctx.createLinearGradient(0, horizon - H * 0.16, 0, horizon + 6);
+    hz.addColorStop(0, 'rgba(30,42,64,0)'); hz.addColorStop(1, 'rgba(30,42,64,0.35)');
+    ctx.fillStyle = hz; ctx.fillRect(0, horizon - H * 0.16, W, H * 0.16 + 6);
+    /* 近くの立ち木と枝葉 */
+    for (i = 0; i < trunks.length; i++) drawTrunk(trunks[i], L);
+    ctx.fillStyle = '#03050a';
+    for (i = 0; i < canopy.length; i++) { p = canopy[i]; ctx.beginPath(); ctx.ellipse(p.x, p.y, p.rx, p.ry, 0, 0, 6.283); ctx.fill(); }
+    /* 地面の枯れ葉 */
+    for (i = 0; i < specks.length; i++) {
+      p = specks[i];
+      var dd = Math.hypot(p.x - cx, (p.y - by) * 1.8) / (u * 1.1);
+      a = 0.45 * L * (1 - dd);
+      if (a > 0.02) { ctx.fillStyle = 'rgba(255,170,90,' + a + ')'; ctx.fillRect(p.x, p.y, p.r * 1.8, p.r * 0.9); }
+    }
+    /* 火明かり */
+    ctx.globalCompositeOperation = 'lighter';
+    var gg = ctx.createRadialGradient(cx, by - u * 0.25, 0, cx, by - u * 0.25, u * 1.2);
+    gg.addColorStop(0, 'rgba(255,125,45,' + (0.3 * L) + ')');
+    gg.addColorStop(0.5, 'rgba(200,70,20,' + (0.1 * L) + ')');
+    gg.addColorStop(1, 'rgba(120,40,10,0)');
+    ctx.fillStyle = gg; ctx.fillRect(0, 0, W, H);
+    ctx.save();
+    ctx.translate(cx, by + u * 0.02); ctx.scale(1, 0.26);
+    var gf = ctx.createRadialGradient(0, 0, 0, 0, 0, u * 0.95);
+    gf.addColorStop(0, 'rgba(255,115,35,' + (0.4 * L) + ')');
+    gf.addColorStop(1, 'rgba(255,90,20,0)');
+    ctx.fillStyle = gf; ctx.fillRect(-u, -u, u * 2, u * 2);
+    ctx.restore();
+    ctx.globalCompositeOperation = 'source-over';
+
+    var heat = (0.4 + 0.6 * (1 - fS * 0.55)) * ep;
+    for (i = 0; i < stones.length; i++) if (stones[i].back) drawStone(stones[i], L);
+    for (i = 0; i < logs.length; i++) if (logs[i].layer === 'back') drawLogO(logs[i], L, heat);
+
+    /* 熾火の床 */
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.save();
+    ctx.translate(cx, by); ctx.scale(1, 0.24);
+    var gb = ctx.createRadialGradient(0, 0, 0, 0, 0, u * 0.3);
+    gb.addColorStop(0, 'rgba(255,110,30,' + (0.2 + 0.45 * ep * (0.4 + 0.6 * (1 - fS))) + ')');
+    gb.addColorStop(1, 'rgba(255,70,10,0)');
+    ctx.fillStyle = gb; ctx.fillRect(-u, -u, u * 2, u * 2);
+    ctx.restore();
+    var ev = 0.4 + 0.6 * (1 - fS * 0.6);
+    for (i = 0; i < coals.length; i++) {
+      p = coals[i];
+      a = ev * (0.3 + 0.7 * (0.5 + 0.5 * Math.sin(time * 0.003 * (0.6 + p.ph * 0.1) + p.ph * 9))) * ep;
+      ctx.globalAlpha = Math.min(1, a);
+      var rr = p.r * (u / 420) * 2.5;
+      ctx.drawImage(sprites[7], cx + p.dx * u - rr, by + p.dy * u - rr, rr * 2, rr * 2);
+    }
+    ctx.globalAlpha = 1;
+
+    /* 炎 */
+    var fa = 0.4 + 0.6 * Math.min(1, fS * 1.5);
+    var cool = Math.round((1 - fS) * 5);
+    for (i = 0; i < parts.length; i++) {
+      p = parts[i]; t = p.age / p.max;
+      var idx = Math.max(0, Math.min(NS - 1, Math.floor(t * NS) + (p.b ? 0 : p.cs + cool)));
+      var sz = p.size * (1.15 - t * 0.85) * 2;
+      if (p.w) {
+        ctx.save();
+        ctx.translate(p.x, p.y); ctx.rotate(Math.atan2(p.ve, -p.vy));
+        ctx.globalAlpha = Math.sin(Math.min(1, t * 3.5) * 1.5708) * Math.pow(1 - t, 1.1) * 0.42 * fa;
+        ctx.drawImage(sprites[idx], -sz * 0.14, -sz * 0.95, sz * 0.28, sz * 1.9);
+        ctx.restore();
+      } else {
+        var pw2 = sz * (0.95 - 0.4 * t), ph = sz * (1 + 0.7 * t);
+        ctx.globalAlpha = Math.pow(1 - t, 1.3) * (p.b ? 0.4 : 0.6) * fa;
+        ctx.drawImage((p.b ? sprites2 : sprites)[idx], p.x - pw2 / 2, p.y - ph / 2, pw2, ph);
+      }
+    }
+    /* 煙 */
+    ctx.globalCompositeOperation = 'source-over';
+    for (i = 0; i < smoke.length; i++) {
+      p = smoke[i]; t = p.age / p.max;
+      var ss = p.size * (1 + t * 2.6) * 2;
+      ctx.globalAlpha = Math.sin(Math.PI * t) * 0.4 * (0.3 + 0.7 * Math.min(1, L));
+      ctx.drawImage(smokeSpr, p.x - ss / 2, p.y - ss / 2, ss, ss);
+    }
+    ctx.globalAlpha = 1;
+
+    /* 手前の薪・焚きつけ・石 */
+    for (i = 0; i < logs.length; i++) if (logs[i].layer === 'front') drawLogO(logs[i], L, heat);
+    for (i = 0; i < sticks.length; i++) drawStick(sticks[i], L, heat);
+    for (i = 0; i < stones.length; i++) if (!stones[i].back) drawStone(stones[i], L);
+
+    /* 火の粉 */
+    ctx.globalCompositeOperation = 'lighter';
+    for (i = 0; i < sparks.length; i++) {
+      p = sparks[i]; t = p.age / p.max;
+      a = (1 - t) * (0.55 + 0.45 * Math.sin(time * 0.03 + p.seed * 9));
+      ctx.fillStyle = 'rgba(255,' + (150 + 80 * (1 - t) | 0) + ',60,' + Math.max(0, a) + ')';
+      var rs = (1.1 + 0.9 * (1 - t)) * Math.max(0.8, s);
+      ctx.fillRect(p.x - rs / 2, p.y - rs / 2, rs, rs);
+    }
+    ctx.globalCompositeOperation = 'source-over';
+
+    /* 周辺を暗く */
+    var vg = ctx.createRadialGradient(cx, by - u * 0.2, u * 0.5, cx, by - u * 0.2, Math.max(W, H) * 0.85);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.6)');
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  }
+
+  /* 音(WebAudioで合成) */
+  var ac = null, master = null, roar = null, whiteBuf = null, soundOn = true;
+  function initAudio() {
+    if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      ac = new AC();
+      master = ac.createGain(); master.gain.value = soundOn ? 0.9 : 0; master.connect(ac.destination);
+      var len = ac.sampleRate * 2, d, i, lastV = 0, w;
+      var brown = ac.createBuffer(1, len, ac.sampleRate); d = brown.getChannelData(0);
+      for (i = 0; i < len; i++) { w = Math.random() * 2 - 1; lastV = (lastV + 0.02 * w) / 1.02; d[i] = lastV * 3.5; }
+      whiteBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate); d = whiteBuf.getChannelData(0);
+      for (i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      var src = ac.createBufferSource(); src.buffer = brown; src.loop = true;
+      var lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 520;
+      roar = ac.createGain(); roar.gain.value = 0;
+      src.connect(lp); lp.connect(roar); roar.connect(master); src.start();
+    } catch (e) { ac = null; }
+  }
+  function setRoar(v) { if (ac && roar) roar.gain.setTargetAtTime(v, ac.currentTime, 0.4); }
+  function pop() {
+    if (!ac || !soundOn || ac.state !== 'running' || !whiteBuf) return;
+    var t0 = ac.currentTime, src = ac.createBufferSource();
+    src.buffer = whiteBuf;
+    var bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 900 + Math.random() * 3200; bp.Q.value = 0.8 + Math.random() * 2;
+    var g = ac.createGain(), peak = (0.12 + Math.random() * 0.4) * (0.5 + 0.5 * Math.max(fS, 0.25)), dur = 0.012 + Math.random() * 0.05;
+    g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(peak, t0 + 0.002); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(bp); bp.connect(g); g.connect(master);
+    src.start(t0, Math.random() * 0.8, dur + 0.02);
+  }
+  function chime() {
+    if (!ac || !soundOn || ac.state !== 'running') return;
+    var t0 = ac.currentTime;
+    [[440, 0.1], [880, 0.04], [1320, 0.015]].forEach(function (pr) {
+      var o = ac.createOscillator(), g = ac.createGain();
+      o.type = 'sine'; o.frequency.value = pr[0];
+      g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(pr[1], t0 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 4.5);
+      o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + 4.6);
+    });
+  }
+
+  /* 画面の文字・ボタン */
+  var elClock = document.getElementById('clock'), elPhase = document.getElementById('phase'),
+      elBurn = document.getElementById('burn'), elGo = document.getElementById('go'),
+      elReset = document.getElementById('reset'), elSnd = document.getElementById('snd'), elFs = document.getElementById('fs');
+
+  function phaseText(r) {
+    if (state === 'idle') return 'ぱちぱちと燃える焚き火を、10分間眺めます。';
+    if (state === 'done') return '熾火になりました。おつかれさま。';
+    if (state === 'paused') return '一時停止中です。';
+    if (r > 180) return '薪が勢いよく燃えています。';
+    if (r > 60) return '火が落ち着いてきました。';
+    return '炎が小さくなり、熾火になっていきます。';
+  }
+  function labelGo() {
+    elGo.textContent = state === 'running' ? '一時停止' : state === 'paused' ? '再開' : state === 'done' ? 'もう一度' : 'スタート';
+  }
+  function ui(force) {
+    var r = remaining / 1000, sec = Math.ceil(r);
+    if (force || sec !== lastSec) {
+      lastSec = sec;
+      var m = Math.floor(sec / 60), ss = sec % 60;
+      elClock.textContent = (m < 10 ? '0' : '') + m + ':' + (ss < 10 ? '0' : '') + ss;
+      elBurn.style.transform = 'scaleX(' + (remaining / (TOTAL * 1000)).toFixed(4) + ')';
+      elClock.style.setProperty('--g', (0.25 + 0.75 * fS).toFixed(2));
+    }
+    var ph = phaseText(r);
+    if (ph !== lastPhase) { lastPhase = ph; elPhase.textContent = ph; }
+  }
+
+  /* 画面を起こしておく */
+  var wake = null;
+  function lockScreen() {
+    try {
+      if (navigator.wakeLock && navigator.wakeLock.request) {
+        navigator.wakeLock.request('screen').then(function (l) { wake = l; }).catch(function () {});
+      }
+    } catch (e) {}
+  }
+  function unlockScreen() { try { if (wake) { wake.release(); wake = null; } } catch (e) {} }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden && state === 'running') lockScreen(); });
+
+  /* 操作 */
+  function start() {
+    initAudio();
+    if (state === 'done') { remaining = TOTAL * 1000; }
+    state = 'running'; endAt = Date.now() + remaining;
+    lockScreen(); labelGo(); ui(true);
+  }
+  function pause() {
+    remaining = Math.max(0, endAt - Date.now());
+    state = 'paused'; setRoar(0); unlockScreen(); labelGo(); ui(true);
+  }
+  function reset() {
+    state = 'idle'; remaining = TOTAL * 1000; setRoar(0); unlockScreen(); labelGo(); lastPhase = ''; ui(true);
+  }
+  function finish() {
+    remaining = 0; state = 'done'; setRoar(0); unlockScreen(); chime(); labelGo(); ui(true);
+  }
+  elGo.addEventListener('click', function () {
+    if (state === 'running') pause(); else start();
+  });
+  elReset.addEventListener('click', reset);
+  elSnd.addEventListener('click', function () {
+    soundOn = !soundOn;
+    elSnd.setAttribute('aria-pressed', String(soundOn));
+    elSnd.textContent = soundOn ? '音 オン' : '音 オフ';
+    if (ac && master) master.gain.setTargetAtTime(soundOn ? 0.9 : 0, ac.currentTime, 0.05);
+  });
+  var rf = document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen;
+  if (!rf) { elFs.hidden = true; }
+  else {
+    elFs.addEventListener('click', function () {
+      try {
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+          (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+        } else {
+          var p = rf.call(document.documentElement);
+          if (p && p.catch) p.catch(function () {});
+        }
+      } catch (e) {}
+    });
+  }
+  document.addEventListener('keydown', function (e) {
+    if (e.code === 'Space' && e.target === document.body) { e.preventDefault(); elGo.click(); }
+  });
+  window.addEventListener('resize', resize);
+
+  /* メインループ */
+  function frame(now) {
+    var dt = Math.min(2.5, (now - (last || now)) / 16.667);
+    last = now; time = now;
+    if (state === 'running') {
+      remaining = Math.max(0, endAt - Date.now());
+      if (remaining <= 0) finish();
+    }
+    var r = remaining / 1000;
+    var tgt = flameLevel(r);
+    fS += (tgt - fS) * (1 - Math.pow(0.96, dt));
+    var heatBase = 0.35 + 0.65 * (1 - fS);
+    var ep = 0.9 + 0.1 * Math.sin(now * 0.0021) + 0.05 * Math.sin(now * 0.0057 + 2);
+    dyn(now);
+    var flick = 1 + 0.1 * Math.sin(now * 0.011) + 0.07 * Math.sin(now * 0.023 + 1) + 0.05 * Math.sin(now * 0.047 + 3) + 0.25 * (hgt - 1);
+    var L = (0.12 + 0.78 * fS + 0.2 * (1 - fS) * heatBase) * flick * (state === 'done' ? ep : 1);
+    L = Math.max(0, Math.min(1.1, L));
+
+    /* ぱちっという音と火の粉 */
+    if (now > nextPop) {
+      var rate = 0.12 + fS * 1.5 + (1 - fS) * 0.1;
+      nextPop = now + rand(120, 620) / rate;
+      var burst = 1 + (Math.random() * 3 | 0);
+      for (var b = 0; b < burst; b++) spawnSpark(fS, true);
+      if (state === 'running') pop();
+    }
+    if (state === 'running') setRoar(0.5 * (0.1 + 0.9 * fS));
+
+    step(dt);
+    render(L, ep);
+    ui(false);
+    requestAnimationFrame(frame);
+  }
+
+  resize();
+  for (var w = 0; w < 90; w++) step(1);
+  labelGo(); ui(true);
+  requestAnimationFrame(frame);
+})();
+</script>
+
+</body></html>

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ひと作り</title>
+<meta name="description" content="寝る前の30〜60分で作った小さな作品の棚">
+<link rel="icon" href="eki-stamp/icons/icon-192.png" type="image/png">
+<style>
+/* 夜の工作机。作品は1枚ずつのカード、タップでその作品へ */
+:root{
+  --bg:#f4f1ea; --card:#fffdf8; --ink:#25221e; --muted:#7a7266; --line:#e2dacb;
+  --f:"Hiragino Mincho ProN","Yu Mincho","YuMincho",serif;
+  --g:"Hiragino Sans","Yu Gothic UI","Meiryo",system-ui,sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#17171b; --card:#212127; --ink:#ebe7df; --muted:#a39d92; --line:#33333b; color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 var(--g);
+  padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+.wrap{max-width:640px;margin:0 auto;padding-inline:16px;padding-block:28px 48px}
+h1{font-family:var(--f);font-size:2.2rem;letter-spacing:.12em;margin:0;line-height:1.2}
+.lead{color:var(--muted);margin:6px 0 24px}
+.list{display:grid;gap:12px}
+a.work{display:grid;grid-template-columns:56px 1fr auto;gap:2px 14px;align-items:center;text-decoration:none;color:inherit;
+  background:var(--card);border:1px solid var(--line);border-left:6px solid var(--c);border-radius:12px;padding:14px 14px 14px 12px}
+a.work:active{transform:scale(.99)}
+a.work:focus-visible{outline:2px solid var(--c);outline-offset:2px}
+.mark{grid-row:span 2;width:56px;height:56px;border-radius:50%;display:grid;place-items:center;
+  font-family:var(--f);font-weight:800;font-size:1.5rem;color:var(--c);border:3px double var(--c)}
+.name{font-weight:800;font-size:1.1rem;font-family:var(--f)}
+.desc{grid-column:2;color:var(--muted);font-size:.85rem;line-height:1.5}
+.go{grid-row:span 2;color:var(--muted);font-size:1.2rem}
+.tag{display:inline-block;font-size:.68rem;font-weight:700;color:var(--c);border:1px solid var(--c);border-radius:999px;padding:0 7px;margin-left:6px;vertical-align:2px;font-family:var(--g)}
+footer{margin-top:32px;color:var(--muted);font-size:.8rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ひと作り</h1>
+  <p class="lead">寝る前の30〜60分で、AIと作った小さな道具たち。</p>
+  <nav class="list">
+    <a class="work" href="eki-stamp/" style="--c:#c8432b">
+      <span class="mark">駅</span>
+      <span class="name">駅スタンプ帳<span class="tag">アプリ</span></span>
+      <span class="go">›</span>
+      <span class="desc">行った駅にスタンプ。ホーム画面に追加でき、電波がなくても開ける</span>
+    </a>
+    <a class="work" href="ic-quiz/" style="--c:#2e7d4f">
+      <span class="mark">IC</span>
+      <span class="name">高速道路IC当てクイズ</span>
+      <span class="go">›</span>
+      <span class="desc">路線を選んで、IC・JCTの順番を当てる</span>
+    </a>
+    <a class="work" href="takibi-timer/" style="--c:#d0711f">
+      <span class="mark">火</span>
+      <span class="name">焚き火タイマー</span>
+      <span class="go">›</span>
+      <span class="desc">ぱちぱち燃える焚き火を10分間眺める</span>
+    </a>
+    <a class="work" href="sashimi-calendar/" style="--c:#24476b">
+      <span class="mark">魚</span>
+      <span class="name">旬の魚図鑑</span>
+      <span class="go">›</span>
+      <span class="desc">月ごとの旬の魚と、柵の選び方・刺身の食べ方</span>
+    </a>
+  </nav>
+  <footer>作品はそれぞれ1つのフォルダ。中身はすべてこのページと同じ場所（GitHub Pages）から届きます。</footer>
+</div>
+</body>
+</html>
