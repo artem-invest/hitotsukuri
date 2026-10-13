@@ -10,7 +10,7 @@ import { renderReview } from "./review.js";
 import { renderLife } from "./life.js";
 import { lineStyle } from "./linestyle.js";
 
-const APP_VERSION = "2.1.0";
+const APP_VERSION = "2.2.0";
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
 // 朝刊の駅スタンプ帳から引き継いだ記録（2026-10-13時点）。初回起動のときだけ入れる
@@ -207,18 +207,16 @@ async function importTimeline(file) {
     else if (size(d) > size(old)) { keep.push(["days", d]); replaced++; }
   }
   await db.putMany(keep);
-  const first = new Map();
-  for (const { m, t } of tl.railStops(days, master, geo.STAMP_RADIUS)) {
-    const cur = first.get(m.id);
-    if (!cur || t < cur.t) first.set(m.id, { m, t });
-  }
   const newVisits = [];
-  for (const { m, t } of [...first.values()].sort((a, b) => a.t - b.t)) {
-    const at = new Date(t * 1000).toISOString();
-    const s = await ensureStation(m, at.slice(0, 10), "timeline");
-    if (visitsOf(s.id).length) continue;
-    const v = { id: `tl-${m.id}`, stationId: s.id, at, how: "timeline", lat: null, lng: null, acc: null };
-    visits.push(v);
+  let newSure = 0, newUnsure = 0;
+  for (const st of firstStops(tl.railStops(days, master, geo.STAMP_RADIUS))) {
+    const known = stations.find((x) => x.gid === st.m.id);
+    if (known?.rejected || (known && (visitsOf(known.id).length || pending.some((v) => v.stationId === known.id)))) continue;
+    const at = new Date(st.t * 1000).toISOString();
+    const s = known || (await ensureStation(st.m, at.slice(0, 10), "timeline"));
+    const v = { id: `tl-${st.m.id}`, stationId: s.id, at, how: "timeline", lat: null, lng: null, acc: null };
+    if (st.sure) { visits.push(v); newSure++; }
+    else { Object.assign(v, { pending: true, dist: Math.round(st.dist), alt: st.alt }); pending.push(v); newUnsure++; }
     newVisits.push(["visits", v]);
   }
   const newSpots = await stampSpots(days, newVisits);
@@ -228,7 +226,7 @@ async function importTimeline(file) {
   await load();
   mapDate = dayKeys.at(-1);
   const same = days.length - added - replaced;
-  toast(`新しい日 ${added}・詳しい記録に入れ替え ${replaced}・そのまま ${same}。初めての駅 ${newVisits.length - newSpots}。確認待ちの施設 ${newSpots}`);
+  toast(`新しい日 ${added}・詳しい記録に入れ替え ${replaced}・そのまま ${same}。初めての駅 ${newSure}。確認待ち：駅 ${newUnsure}・施設 ${newSpots}`);
 }
 
 // SA・PA・道の駅・銭湯・温泉：立ち寄ったかもしれない所を「確認待ち」にする（最初の1回だけ）。書き込む visits を out に足し、件数を返す
@@ -270,6 +268,38 @@ async function backfillSpots() {
   if (n) { toast(`これまでの記録から、行ったかもしれない施設が ${n} か所見つかりました。「最近」で確かめてください`); render(); }
 }
 
+// 駅ごとに、いちばん早い乗り降りの日時と「一度でも自信ありがあったか」をまとめる
+function firstStops(stops) {
+  const by = new Map();
+  for (const { m, t, sure, alt } of stops) {
+    const cur = by.get(m.id) || { m, t, sure: false, dist: m.dist, alt: null };
+    if (t < cur.t) cur.t = t;
+    if (sure) cur.sure = true;
+    if (!sure) { cur.alt ||= alt; cur.dist = Math.min(cur.dist, m.dist); }
+    by.set(m.id, cur);
+  }
+  return [...by.values()].sort((a, b) => a.t - b.t);
+}
+
+// 2.1.0 までにタイムラインから自動で入れた駅のうち、自信の低いものを1回だけ確認待ちに戻す
+async function recheckStationsOnce() {
+  if (!dayKeys.length || !master || (await db.getMeta("stationConfirm")) === 1) return;
+  allDays ||= await db.getAll("days");
+  const unsure = firstStops(tl.railStops(allDays, master, geo.STAMP_RADIUS)).filter((x) => !x.sure);
+  const back = [];
+  for (const st of unsure) {
+    const s = stations.find((x) => x.gid === st.m.id);
+    const v = s && visits.find((x) => x.stationId === s.id && x.how === "timeline");
+    // 自分で記録した（GPS・タップ・朝刊から）記録がある駅は、行ったのが確かなので聞かない
+    if (!v || visits.some((x) => x.stationId === s.id && x.how !== "timeline")) continue;
+    Object.assign(v, { pending: true, dist: Math.round(st.dist), alt: st.alt });
+    back.push(["visits", v]);
+  }
+  await db.putMany(back);
+  await db.setMeta("stationConfirm", 1);
+  if (back.length) { await load(); toast(`見分けにくい駅 ${back.length} か所を「行ったか確かめてください」に入れました`); }
+}
+
 // 2.0.0 までにタイムラインから自動で入れた施設を、1回だけ確認待ちに戻す
 async function recheckSpotsOnce() {
   if ((await db.getMeta("spotConfirm")) === 1) return;
@@ -298,14 +328,19 @@ function renderConfirm() {
   if (!pending.length) return null;
   return h("section", { class: "card confirm" },
     h("h2", { text: `行ったか確かめてください（${pending.length}件）` }),
-    h("p", { class: "muted", text: "タイムラインで近くに長めにいた施設です。隣のお店や家にいただけのこともあるので、行った所だけ「行った」を押してください。" }),
+    h("p", { class: "muted", text: "タイムラインから見つけたけれど、確かではない場所です（施設の近くに長めにいた・紛らわしい駅が近くにある）。日付をタップするとその日のルートが見られます。行った所だけ「行った」を押してください。" }),
     h("ol", { class: "nearlist" }, pending.map((v) => {
       const s = stations.find((x) => x.id === v.stationId);
       if (!s) return null;
-      const info = [rd.KINDS[s.kind]?.label, ymd(v.at), v.stay != null ? `${v.stay}分いた` : "", v.dist != null ? `${v.dist}m` : ""].filter(Boolean).join("・");
+      const day = localDay(v.at);
+      const why = isSpot(s)
+        ? [v.stay != null ? `${v.stay}分いた` : "", v.dist != null ? `${v.dist}m` : ""]
+        : [v.dist != null ? `乗り降りした地点から${v.dist}m` : "", v.alt ? `近くに${v.alt}駅` : ""];
       return h("li", {},
         h("div", {}, h("b", { text: s.name }), h("small", {},
-          info + "　", h("a", { href: `https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`, target: "_blank", rel: "noopener", text: "地図" }))),
+          `${rd.KINDS[s.kind]?.label || "駅"}・`,
+          dayKeys.includes(day) ? h("button", { type: "button", class: "linkish", text: ymd(v.at), onclick: () => openDay(day, s) }) : ymd(v.at),
+          [""].concat(why.filter(Boolean)).join("・"))),
         h("div", { class: "yn" },
           h("button", { type: "button", class: "primary", text: "行った", onclick: () => confirmSpot(v, true) }),
           h("button", { type: "button", text: "行ってない", onclick: () => confirmSpot(v, false) })));
@@ -759,7 +794,8 @@ function renderLog(main) {
     list.append(h("li", { class: "row", style: `--ink:${inkOf(v.stationId)}` },
       h("span", { class: "d", text: md(v.at) }),
       h("span", { class: "n", text: s ? s.name : "（削除した駅）" }),
-      h("span", { class: "w", text: HOW[v.how] || "" })));
+      h("span", { class: "w", text: HOW[v.how] || "" }),
+      v.note ? h("span", { class: "nt", text: v.note }) : null));
   }
   main.append(list);
 }
@@ -821,7 +857,15 @@ function openSheet(s) {
                 undo.dataset.armed = "1"; undo.textContent = "本当に？";
               } });
             const acc = v.how === "gps" && v.acc != null ? ` ±${meters(v.acc)}` : "";
-            return h("li", {}, h("span", { text: `${ymd(v.at)}（${HOW[v.how] || ""}${acc}）` }), undo);
+            const day = localDay(v.at);
+            const note = h("input", { class: "note", value: v.note || "", placeholder: "一言（例：家族で。黒湯がよかった）", maxlength: 120,
+              onchange: async () => { v.note = note.value.trim(); await db.put("visits", v); toast("一言を残しました"); } });
+            return h("li", { class: "visit" },
+              h("div", { class: "vrow" },
+                h("span", { text: `${ymd(v.at)}（${HOW[v.how] || ""}${acc}）` }),
+                dayKeys.includes(day) ? h("button", { type: "button", class: "small", text: "その日のルート", onclick: () => openDay(day, s, () => openSheet(s)) }) : null,
+                undo),
+              note);
           }))
         : h("p", { class: "muted", text: "まだ記録はありません。" }),
       h("p", { class: "links" },
@@ -831,6 +875,32 @@ function openSheet(s) {
   };
   draw();
   dlg.showModal();
+}
+
+/* ---------- その日のルート（シートの中に地図） ---------- */
+// back があれば「戻る」で前のシートへ
+async function openDay(date, s, back = null) {
+  const dlg = $("#sheet");
+  const box = h("div", { class: "map dlgmap" });
+  const sum = h("div", { class: "modes" });
+  dlg.replaceChildren(h("div", { class: "sheet" },
+    h("header", {},
+      h("h2", { text: `${ymd(date + "T12:00")}のルート` }),
+      h("button", { type: "button", class: "close", "aria-label": "閉じる", text: "×", onclick: () => dlg.close() })),
+    sum, box,
+    h("div", { class: "foot" },
+      back ? h("button", { type: "button", class: "small", text: "← 戻る", onclick: back }) : null,
+      h("button", { type: "button", class: "small", text: "地図タブで開く", onclick: () => { dlg.close(); mapDate = date; tab = "map"; render(); window.scrollTo(0, 0); } }))));
+  if (!dlg.open) dlg.showModal();
+  const [day, r] = await Promise.all([db.get("days", date), rd.loadRoads().catch(() => null)]);
+  if (!day) { box.textContent = "この日の道のりの記録はありません。"; return; }
+  roads ||= r;
+  const km = tl.kmByMode(day.acts);
+  const car = roads && km.car ? rd.splitCar(roads, day) : null;
+  sum.replaceChildren(...Object.entries(km).filter(([m, v]) => v > 0 && m !== "fly").map(([m, v]) =>
+    h("span", { class: "chip", style: `--c:${tl.MODES[m].color}`, text: `${tl.MODES[m].label} ${v}km` })));
+  const here = s?.lat != null ? [s] : [];
+  drawDay(box, day, here, car);
 }
 
 /* ---------- 起動 ---------- */
@@ -867,6 +937,6 @@ if ("serviceWorker" in navigator) {
   meta.persisted = await askPersist().catch(() => "unsupported");
   if (tab === "backup") render();
   try { master = await geo.loadMaster(); await linkMaster(); render(); await loadRides(); render(); } catch {}
-  try { await recheckSpotsOnce(); render(); await backfillSpots(); } catch {}
+  try { await recheckSpotsOnce(); render(); await backfillSpots(); await recheckStationsOnce(); render(); } catch {}
   if (await geo.permitted()) findNear(); // 許可済みなら、開いたときに自動で探す
 })();

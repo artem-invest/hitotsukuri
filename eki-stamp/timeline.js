@@ -67,14 +67,18 @@ export function parseTimeline(data) {
 }
 
 // 電車で乗り降りした駅：電車の移動の「出発地点」「到着地点」から一番近い駅（radius m 以内）
+// sure＝自信あり：駅から150m未満で、2番目に近い駅との差が80m以上（紛らわしい隣の駅が無い）
+// 実データで167駅中16駅が「一度も自信ありが無い」（豪徳寺と山下、浜松町とモノレール浜松町など）
 export function railStops(days, master, radius) {
   const out = [];
   for (const d of days) {
     for (const a of d.acts) {
       if (a.mode !== "train") continue;
       for (const [ll, t] of [[a.a, a.s], [a.b, a.e]]) {
-        const n = geo.nearest(master, ll[0], ll[1], 1)[0];
-        if (n && n.dist <= radius) out.push({ m: n, t });
+        const [n, n2] = geo.nearest(master, ll[0], ll[1], 2);
+        if (!n || n.dist > radius) continue;
+        const sure = n.dist < 150 && !(n2 && n2.dist - n.dist < 80);
+        out.push({ m: n, t, sure, alt: n2 && !sure ? n2.name : null });
       }
     }
   }
