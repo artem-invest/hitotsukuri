@@ -6,14 +6,16 @@ export const STAMP_RADIUS = 300; // 駅（どれかのホーム）からこの�
 let master = null;
 let loading = null;
 
-// 1行 [id, 駅名, 路線, [[経度,緯度],...]] → 使いやすい形に
+// stations: [id, 駅名, [路線番号...], [[経度,緯度],...]] ／ lines: [路線名, [駅ID...（並び順）]]
 export function loadMaster() {
   if (master) return Promise.resolve(master);
   loading ||= fetch("./stations.json")
     .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then((d) => {
-      master = d.stations.map(([id, name, lines, pts]) => ({ id, name, lines, pts }));
+      const lineNames = d.lines.map((l) => l[0]);
+      master = d.stations.map(([id, name, li, pts]) => ({ id, name, li, lines: li.map((i) => lineNames[i]).join("・"), pts }));
       master.byId = Object.fromEntries(master.map((m) => [m.id, m]));
+      master.lines = d.lines.map(([name, ids], i) => ({ i, name, ids }));
       master.source = d.source;
       return master;
     })

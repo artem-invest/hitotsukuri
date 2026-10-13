@@ -3,7 +3,7 @@
 import * as db from "./db.js";
 import * as geo from "./geo.js";
 
-const APP_VERSION = "1.1.0";
+const APP_VERSION = "1.2.0";
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
 // 朝刊の駅スタンプ帳から引き継いだ記録（2026-10-13時点）。初回起動のときだけ入れる
@@ -76,7 +76,11 @@ async function load() {
 async function linkMaster() {
   const changed = [];
   for (const s of stations) {
-    if (s.gid) continue;
+    if (s.gid) {
+      const m = master.byId[s.gid];
+      if (m && s.lines !== m.lines) { s.lines = m.lines; changed.push(["stations", s]); }
+      continue;
+    }
     const hits = master.filter((m) => m.name === s.name);
     if (hits.length !== 1) continue;
     const c = geo.center(hits[0]);
@@ -129,22 +133,10 @@ async function ensureStation(m) {
   return s;
 }
 
-async function addStation(name, m = null) {
-  if (m) {
-    if (stations.some((x) => x.gid === m.id)) { toast(`${m.name} はもうあります`); return; }
-    await ensureStation(m);
-    toast(`${m.name} を追加しました`);
-    render();
-    return;
-  }
-  name = name.trim().replace(/駅$/, "");
-  if (!name) return;
-  if (stations.some((s) => s.name === name)) { toast(`${name} はもうあります`); return; }
-  const s = { id: uid("u"), name, area: "", firstDate: today(), url: "", lat: null, lng: null, source: "manual" };
-  await db.put("stations", s);
-  stations.push(s);
-  toast(`${name} を追加しました`);
-  render();
+// 押し忘れた駅を、今日の日付・タップ扱いで記録する
+async function recordForgot(m) {
+  const s = await ensureStation(m);
+  await addVisit(s);
 }
 
 /* ---------- 近くの駅（GPS） ---------- */
@@ -222,10 +214,11 @@ async function importJson(file) {
 function render() {
   document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
   const went = stations.filter((s) => visitsOf(s.id).length);
-  $("#summary").textContent = `${went.length}駅 / ${stations.length}駅・スタンプ ${visits.length}個`;
+  $("#summary").textContent = `${went.length}駅・スタンプ ${visits.length}個`;
   const main = $("#main");
   main.replaceChildren();
   if (tab === "stamps") renderStamps(main);
+  else if (tab === "lines") renderLines(main);
   else if (tab === "log") renderLog(main);
   else renderBackup(main);
 }
@@ -278,16 +271,95 @@ function renderNear() {
   return box;
 }
 
+/* ---------- 路線の塗り絵 ---------- */
+// 押した駅（全国データと結びついたもの）の集合
+const visitedGids = () => new Set(stations.filter((s) => s.gid && visitsOf(s.id).length).map((s) => s.gid));
+
+// 押した駅が1つでもある路線と、その埋まり具合
+function myLines() {
+  if (!master) return [];
+  const got = visitedGids();
+  const touched = new Set();
+  for (const g of got) for (const i of master.byId[g]?.li || []) touched.add(i);
+  return [...touched].map((i) => {
+    const l = master.lines[i];
+    const done = l.ids.filter((id) => got.has(id)).length;
+    return { ...l, done, total: l.ids.length, left: l.ids.length - done };
+  }).sort((a, b) => b.done / b.total - a.done / a.total || a.left - b.left);
+}
+
+// 次の一駅：自分の路線のまだの駅を、今いる所（無ければ最後に押した駅）から近い順に
+function nextStations(n = 3) {
+  const lines = myLines();
+  if (!lines.length) return { from: null, list: [] };
+  let from = near.state === "done" ? { lat: near.pos.lat, lng: near.pos.lng, label: "今いる所" } : null;
+  if (!from) {
+    const last = [...visits].sort((a, b) => b.at.localeCompare(a.at)).map((v) => stations.find((s) => s.id === v.stationId)).find((s) => s?.lat != null);
+    if (last) from = { lat: last.lat, lng: last.lng, label: `最後に押した${last.name}` };
+  }
+  if (!from) return { from: null, list: [] };
+  const got = visitedGids();
+  const seen = new Map();
+  for (const l of lines) {
+    for (const id of l.ids) {
+      if (got.has(id)) continue;
+      const m = master.byId[id];
+      const d = Math.min(...m.pts.map((p) => geo.distance(from.lat, from.lng, p[1], p[0])));
+      const cur = seen.get(id);
+      // 同じ駅が複数の路線にあるときは、残りの少ない（制覇に近い）路線で紹介する
+      if (!cur || l.left < cur.line.left) seen.set(id, { m, d, line: l });
+    }
+  }
+  return { from, list: [...seen.values()].sort((a, b) => a.d - b.d).slice(0, n) };
+}
+
+function renderNext() {
+  const { from, list } = nextStations();
+  if (!list.length) return null;
+  return h("section", { class: "next" },
+    h("h2", { text: "次の一駅" }),
+    h("p", { class: "muted", text: `${from.label}から近い、あなたの路線のまだ降りていない駅` }),
+    h("ol", { class: "nearlist" }, list.map(({ m, d, line }) => h("li", {},
+      h("div", {}, h("b", { text: m.name }), h("small", { text: `${line.name} あと${line.left}駅で制覇・${meters(d)}` })),
+      h("a", { class: "maplink", href: `https://www.google.com/maps/search/?api=1&query=${geo.center(m).lat},${geo.center(m).lng}`, target: "_blank", rel: "noopener", text: "地図" })))));
+}
+
+function renderLines(main) {
+  const lines = myLines();
+  if (!lines.length) {
+    main.append(h("p", { class: "empty", text: "駅でスタンプを押すと、その駅を通る路線がここに並びます。全駅で降りたら「制覇」です。" }));
+    return;
+  }
+  const got = visitedGids();
+  const full = lines.filter((l) => l.left === 0).length;
+  main.append(h("p", { class: "linesum" }, h("b", { text: `${lines.length}路線` }), ` に足あと・制覇 ${full}路線`));
+  for (const l of lines) {
+    const pct = Math.round((l.done / l.total) * 100);
+    const d = h("details", { class: "line" + (l.left === 0 ? " full" : "") },
+      h("summary", {},
+        h("span", { class: "ln", text: l.name }),
+        h("span", { class: "cnt", text: l.left === 0 ? "制覇！" : `${l.done}/${l.total}` }),
+        h("span", { class: "bar" }, h("i", { style: `width:${pct}%` }))),
+      h("ol", { class: "dots" }, l.ids.map((id) => h("li", { class: got.has(id) ? "on" : "" }, master.byId[id].name))));
+    main.append(d);
+  }
+  main.append(h("p", { class: "hint", text: "路線をタップすると、端から順に駅が並びます（色つき＝降りた駅）。支線のある路線は順番が少し前後します。" }));
+}
+
 function renderStamps(main) {
   main.append(backupNudge() || "", renderNear());
-  if (!stations.length) {
-    main.append(h("p", { class: "empty", text: "まだ駅がありません。下から駅を追加してください。" }));
+  const mine = stations.filter((s) => visitsOf(s.id).length);
+  if (!mine.length) {
+    main.append(h("p", { class: "empty", text: "まだスタンプがありません。駅に着いたら「近くの駅を探す」を押してください。" }));
   } else {
-    const list = [...stations].sort((a, b) => (a.firstDate || "").localeCompare(b.firstDate || "") || a.name.localeCompare(b.name, "ja"));
+    // 最近押した順
+    const last = (s) => visitsOf(s.id).at(-1).at;
+    const list = mine.sort((a, b) => last(b).localeCompare(last(a)));
     main.append(h("div", { class: "grid" }, list.map(stampButton)));
-    main.append(h("p", { class: "hint", text: "駅をタップすると、スタンプを押したり記録を見たりできます。" }));
+    main.append(h("p", { class: "hint", text: "駅をタップすると、記録を見たり、もう一度押したりできます。" }));
   }
-  // 駅を追加：打つと全国の駅から候補が出る。候補に無い名前もそのまま足せる
+  main.append(renderNext() || "");
+  // 押し忘れた駅を記録：打つと全国の駅から候補が出る
   const sugg = h("ul", { class: "sugg" });
   const name = h("input", { name: "name", placeholder: "駅名（例：吉祥寺）", required: true, autocomplete: "off", enterkeyhint: "done",
     oninput: async () => {
@@ -295,14 +367,13 @@ function renderStamps(main) {
       try { master ||= await geo.loadMaster(); } catch { return; }
       if (name.value !== q) return;
       sugg.replaceChildren(...geo.search(master, q).map((m) => h("li", {},
-        h("button", { type: "button", onclick: () => addStation(m.name, m) },
+        h("button", { type: "button", onclick: async () => { await recordForgot(m); name.value = ""; sugg.replaceChildren(); } },
           h("b", { text: m.name }), h("small", { text: m.lines })))));
     } });
-  main.append(h("form", {
-    class: "add",
-    onsubmit: (e) => { e.preventDefault(); addStation(name.value); },
-  }, h("h2", { text: "駅を追加" }), h("div", { class: "row" }, name, h("button", { type: "submit", text: "追加" })), sugg,
-    h("p", { class: "muted", text: "候補をタップすると、位置つきで追加されます。" })));
+  main.append(h("details", { class: "add" },
+    h("summary", { text: "GPSで押し忘れた駅を記録する" }),
+    h("div", { class: "row" }, name), sugg,
+    h("p", { class: "muted", text: "候補をタップすると、今日の日付でスタンプが押されます（記録には「タップ」と残ります）。" })));
 }
 
 function renderLog(main) {

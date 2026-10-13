@@ -6,7 +6,7 @@
 
 | 作品 | URL | ひとこと |
 |---|---|---|
-| 駅スタンプ帳 | https://artem-invest.github.io/hitotsukuri/eki-stamp/ | 行った駅にスタンプ。GPSで駅の近く（300m）なら押せる。PWA（インストール・オフライン・JSONでバックアップ） |
+| 駅スタンプ帳 | https://artem-invest.github.io/hitotsukuri/eki-stamp/ | 駅の近く（300m）でGPSスタンプ。押した駅の路線が塗り絵になり、空きが「次に降りる駅」になる。PWA（インストール・オフライン・JSONでバックアップ） |
 | 高速道路IC当てクイズ | https://artem-invest.github.io/hitotsukuri/ic-quiz/ | 路線を選んで、IC・JCTの順番を当てる |
 | 焚き火タイマー | https://artem-invest.github.io/hitotsukuri/takibi-timer/ | ぱちぱち燃える焚き火を10分間眺める |
 | 旬の魚図鑑 | https://artem-invest.github.io/hitotsukuri/sashimi-calendar/ | 月ごとの旬の魚と、柵の選び方・刺身の食べ方 |

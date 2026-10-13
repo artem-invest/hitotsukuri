@@ -3,7 +3,7 @@
 // 2回目からは、しまっておいたものをすぐ返す（電波がなくても開ける）。
 // 裏でネットから最新版を取りに行き、取れたら差し替える（次に開いたときに新しい版になる）。
 
-const VERSION = "eki-stamp-v2"; // アプリ本体を変えたらここを上げる → 古いしまい場所を捨てる
+const VERSION = "eki-stamp-v3"; // アプリ本体を変えたらここを上げる → 古いしまい場所を捨てる
 const SHELL = [
   "./",
   "./index.html",
@@ -19,7 +19,8 @@ const SHELL = [
 ];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(VERSION).then((cache) => cache.addAll(SHELL)));
+  // cache:"reload" … ブラウザの一時保存を通さず、必ずサーバーから新しい版を取る（古い駅データが混ざらないように）
+  event.waitUntil(caches.open(VERSION).then((cache) => cache.addAll(SHELL.map((u) => new Request(u, { cache: "reload" })))));
   self.skipWaiting();
 });
 

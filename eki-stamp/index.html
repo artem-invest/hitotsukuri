@@ -74,6 +74,26 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
 .sugg b{margin-right:8px}
 .sugg small{color:var(--muted);font-size:.75rem}
 .links{display:flex;gap:16px}
+.next{margin-top:24px}
+.next h2{font-family:var(--f);font-size:1.1rem;margin:0}
+.next .muted{margin:0}
+.maplink{flex:none;color:var(--accent);font-weight:700;font-size:.85rem}
+.add summary{cursor:pointer;font-weight:700;font-size:.9rem;color:var(--muted)}
+.add[open] summary{margin-bottom:8px}
+.linesum{margin:16px 0 4px}
+.linesum b{font-family:var(--f);font-size:1.2rem}
+details.line{background:var(--paper);border:1px solid var(--line);border-radius:12px;margin-top:10px;padding:10px 14px}
+details.line summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:baseline}
+details.line summary::-webkit-details-marker{display:none}
+details.line .ln{font-family:var(--f);font-weight:800;font-size:1.05rem}
+details.line .cnt{font-family:ui-monospace,Menlo,monospace;font-weight:700;color:var(--muted)}
+details.line .bar{grid-column:1/-1;height:6px;border-radius:3px;background:var(--line);overflow:hidden}
+details.line .bar i{display:block;height:100%;background:var(--accent);border-radius:3px}
+details.line.full{border-color:var(--accent)}
+details.line.full .cnt{color:var(--accent)}
+.dots{list-style:none;margin:12px 0 2px;padding:0;display:flex;flex-wrap:wrap;gap:6px}
+.dots li{font-size:.8rem;border:1.5px dashed var(--empty);color:var(--muted);border-radius:999px;padding:1px 10px}
+.dots li.on{border:1.5px solid var(--accent);background:var(--accent);color:#fff;font-weight:700}
 .add{margin-top:24px;background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
 .add h2,.card h2{font-size:1rem;margin:0 0 8px;font-family:var(--f)}
 .add .row{display:flex;flex-wrap:wrap;gap:8px}
@@ -121,6 +141,7 @@ dialog#sheet::backdrop{background:rgba(0,0,0,.4)}
   </header>
   <nav class="tabs" role="tablist">
     <button type="button" role="tab" data-tab="stamps" aria-selected="true">スタンプ</button>
+    <button type="button" role="tab" data-tab="lines" aria-selected="false">路線</button>
     <button type="button" role="tab" data-tab="log" aria-selected="false">記録</button>
     <button type="button" role="tab" data-tab="backup" aria-selected="false">バックアップ</button>
   </nav>
