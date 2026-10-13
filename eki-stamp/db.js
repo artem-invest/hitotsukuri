@@ -3,7 +3,7 @@
 // 「駅」と「訪問」を別々の表として持てるので、あとから地図やGPSを足しやすい。
 
 const DB_NAME = "eki-stamp";
-const DB_VERSION = 1;
+const DB_VERSION = 2; // 2: タイムラインの日ごとの記録（days）を追加
 let dbPromise = null;
 
 export function openDB() {
@@ -22,12 +22,20 @@ export function openDB() {
         const visits = db.createObjectStore("visits", { keyPath: "id" });
         visits.createIndex("stationId", "stationId");
       }
+      // 日ごとの移動の記録（タイムラインから）。1日＝1行
+      if (!db.objectStoreNames.contains("days")) {
+        db.createObjectStore("days", { keyPath: "date" });
+      }
       // 設定・メモ（最後に書き出した日など）
       if (!db.objectStoreNames.contains("meta")) {
         db.createObjectStore("meta");
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      // 新しい版が表を足そうとしたら、古い画面はつなぎを手放す（でないと更新が止まる）
+      req.result.onversionchange = () => req.result.close();
+      resolve(req.result);
+    };
     req.onerror = () => reject(req.error);
   });
   return dbPromise;
@@ -45,6 +53,16 @@ const finished = (tx) => new Promise((resolve, reject) => {
 export async function getAll(store) {
   const db = await openDB();
   return result(db.transaction(store).objectStore(store).getAll());
+}
+
+export async function get(store, key) {
+  const db = await openDB();
+  return result(db.transaction(store).objectStore(store).get(key));
+}
+
+export async function getAllKeys(store) {
+  const db = await openDB();
+  return result(db.transaction(store).objectStore(store).getAllKeys());
 }
 
 export async function put(store, value) {

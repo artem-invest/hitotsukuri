@@ -2,8 +2,10 @@
 // データの流れ： IndexedDB（db.js）→ stations / visits の配列 → render() で画面を作り直す
 import * as db from "./db.js";
 import * as geo from "./geo.js";
+import * as tl from "./timeline.js";
+import { drawDay } from "./map.js";
 
-const APP_VERSION = "1.2.0";
+const APP_VERSION = "1.3.0";
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
 // 朝刊の駅スタンプ帳から引き継いだ記録（2026-10-13時点）。初回起動のときだけ入れる
@@ -41,11 +43,12 @@ function h(tag, props = {}, ...kids) {
 const uid = (p) => `${p}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 const md = (iso) => { const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()}`; };
 const ymd = (iso) => { const d = new Date(iso); return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`; };
+const localDay = (iso) => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 function hash(s) { let n = 0; for (const c of s) n = (n * 31 + c.charCodeAt(0)) >>> 0; return n; }
 const inkOf = (id) => INKS[hash(id) % INKS.length];
 const tiltOf = (id) => (hash(id + "t") % 21) - 10; // -10〜+10度
-const HOW = { tap: "タップ", gps: "GPS", chokan: "朝刊から", import: "読み込み" };
+const HOW = { tap: "タップ", gps: "GPS", chokan: "朝刊から", import: "読み込み", timeline: "タイムライン" };
 const meters = (d) => (d < 1000 ? `${Math.round(d / 10) * 10}m` : `${(d / 1000).toFixed(1)}km`);
 
 function toast(msg) {
@@ -62,6 +65,9 @@ let meta = { lastExport: null, persisted: "?" };
 let tab = "stamps";
 let near = { state: "idle" }; // 近くの駅：idle / locating / done / error
 let master = null;            // 全国の駅データ（geo.loadMaster）
+let dayKeys = [];             // タイムラインの記録がある日（"YYYY-MM-DD" の昇順）
+let mapDate = null;           // 地図で見ている日
+let allDays = null;           // 月ごとの距離を出すときにだけ全日分を読む
 try { tab = localStorage.getItem("eki.tab") || "stamps"; } catch {}
 
 const visitsOf = (id) => visits.filter((v) => v.stationId === id).sort((a, b) => a.at.localeCompare(b.at));
@@ -69,6 +75,8 @@ const visitsOf = (id) => visits.filter((v) => v.stationId === id).sort((a, b) =>
 async function load() {
   [stations, visits] = await Promise.all([db.getAll("stations"), db.getAll("visits")]);
   meta.lastExport = await db.getMeta("lastExport");
+  dayKeys = (await db.getAllKeys("days")).sort();
+  allDays = null;
   render();
 }
 
@@ -123,11 +131,11 @@ async function removeVisit(v) {
 }
 
 // 全国データの駅 m に対応する手持ちの駅を返す。無ければ作る
-async function ensureStation(m) {
+async function ensureStation(m, firstDate = today(), source = "master") {
   let s = stations.find((x) => x.gid === m.id);
   if (s) return s;
   const c = geo.center(m);
-  s = { id: m.id, gid: m.id, name: m.name, lines: m.lines, area: "", firstDate: today(), url: "", lat: c.lat, lng: c.lng, source: "master" };
+  s = { id: m.id, gid: m.id, name: m.name, lines: m.lines, area: "", firstDate, url: "", lat: c.lat, lng: c.lng, source };
   await db.put("stations", s);
   stations.push(s);
   return s;
@@ -170,6 +178,44 @@ async function removeStation(s) {
   visits = visits.filter((v) => v.stationId !== s.id);
   toast(`${s.name} を削除しました`);
   render();
+}
+
+/* ---------- タイムラインの読み込み ---------- */
+// 日ごとの道のりを保存し、電車で乗り降りした駅のうち「まだ記録の無い駅」に、実際に行った日でスタンプを押す。
+// 通勤の駅に毎日スタンプが増えないよう、タイムラインから押すのは駅ごとに最初の1回だけ。
+async function importTimeline(file) {
+  toast("タイムラインを読んでいます…");
+  let days;
+  try { days = tl.parseTimeline(JSON.parse(await file.text())); }
+  catch { toast("タイムラインの書き出しファイルではありません"); return; }
+  if (!days.length) { toast("移動の記録がありませんでした"); return; }
+  try { master ||= await geo.loadMaster(); } catch { toast("駅データを読み込めませんでした"); return; }
+  await db.putMany(days.map((d) => ["days", d])); // 同じ日は新しいほうで置き換える
+  const first = new Map();
+  for (const { m, t } of tl.railStops(days, master, geo.STAMP_RADIUS)) {
+    const cur = first.get(m.id);
+    if (!cur || t < cur.t) first.set(m.id, { m, t });
+  }
+  const newVisits = [];
+  for (const { m, t } of [...first.values()].sort((a, b) => a.t - b.t)) {
+    const at = new Date(t * 1000).toISOString();
+    const s = await ensureStation(m, at.slice(0, 10), "timeline");
+    if (visitsOf(s.id).length) continue;
+    const v = { id: `tl-${m.id}`, stationId: s.id, at, how: "timeline", lat: null, lng: null, acc: null };
+    visits.push(v);
+    newVisits.push(["visits", v]);
+  }
+  await db.putMany(newVisits);
+  await db.setMeta("lastTimeline", new Date().toISOString());
+  await load();
+  mapDate = dayKeys.at(-1);
+  toast(`${days.length}日分を読み込み、新しい駅 ${newVisits.length} にスタンプを押しました`);
+}
+
+function timelinePicker(label, primary = false) {
+  const file = h("input", { type: "file", accept: "application/json,.json", hidden: true,
+    onchange: () => { if (file.files[0]) importTimeline(file.files[0]); file.value = ""; } });
+  return [h("button", { type: "button", class: primary ? "primary" : "", onclick: () => file.click(), text: label }), file];
 }
 
 /* ---------- バックアップ（JSONの書き出し・読み込み） ---------- */
@@ -219,6 +265,7 @@ function render() {
   main.replaceChildren();
   if (tab === "stamps") renderStamps(main);
   else if (tab === "lines") renderLines(main);
+  else if (tab === "map") renderMap(main);
   else if (tab === "log") renderLog(main);
   else renderBackup(main);
 }
@@ -376,7 +423,80 @@ function renderStamps(main) {
     h("p", { class: "muted", text: "候補をタップすると、今日の日付でスタンプが押されます（記録には「タップ」と残ります）。" })));
 }
 
+/* ---------- 地図（1日の道のり） ---------- */
+function renderMap(main) {
+  if (!dayKeys.length) {
+    main.append(h("section", { class: "card" },
+      h("h2", { text: "移動の記録を読み込む" }),
+      h("p", { text: "Googleマップのタイムライン（スマホが裏で記録している、行った場所と道のり）を読み込むと、日ごとの道のりが地図に出て、電車で乗り降りした駅に自動でスタンプが押されます。" }),
+      h("ol", { class: "steps" },
+        h("li", { text: "スマホの「設定」→「位置情報」→「位置情報サービス」→「タイムライン」" }),
+        h("li", { text: "「タイムライン データをエクスポート」で保存" }),
+        h("li", { text: "下のボタンで、そのファイルを選ぶ" })),
+      h("div", { class: "btns" }, ...timelinePicker("タイムラインを読み込む", true)),
+      h("p", { class: "muted", text: "ファイルはこのスマホの中で読むだけで、どこにも送りません。" })));
+    return;
+  }
+  if (!mapDate || !dayKeys.includes(mapDate)) mapDate = dayKeys.at(-1);
+  const i = dayKeys.indexOf(mapDate);
+  const go = (d) => { mapDate = d; render(); };
+  const pick = h("input", { type: "date", value: mapDate, min: dayKeys[0], max: dayKeys.at(-1),
+    onchange: () => {
+      // 記録の無い日を選んだら、その日以前で一番近い記録のある日へ
+      const v = pick.value;
+      go([...dayKeys].reverse().find((d) => d <= v) || dayKeys[0]);
+    } });
+  main.append(h("div", { class: "daynav" },
+    h("button", { type: "button", "aria-label": "前の日", disabled: i <= 0, onclick: () => go(dayKeys[i - 1]), text: "‹" }),
+    pick,
+    h("button", { type: "button", "aria-label": "次の日", disabled: i >= dayKeys.length - 1, onclick: () => go(dayKeys[i + 1]), text: "›" })));
+  const sum = h("div", { class: "modes" });
+  const box = h("div", { class: "map" });
+  const below = h("div");
+  main.append(sum, box, below);
+  db.get("days", mapDate).then((day) => {
+    if (!day || mapDate !== day.date) return;
+    const km = tl.kmByMode(day.acts);
+    const total = Object.values(km).reduce((a, b) => a + b, 0);
+    sum.replaceChildren(h("b", { text: `${ymd(mapDate + "T12:00")}　${total.toFixed(1)}km` }),
+      ...Object.entries(km).filter(([, v]) => v > 0).map(([m, v]) =>
+        h("span", { class: "chip", style: `--c:${tl.MODES[m].color}`, text: `${tl.MODES[m].label} ${v}km` })));
+    const stamped = visits.filter((v) => localDay(v.at) === mapDate)
+      .map((v) => stations.find((s) => s.id === v.stationId)).filter((s) => s?.lat != null);
+    drawDay(box, day, stamped);
+    below.replaceChildren(
+      stamped.length ? h("p", { class: "muted", text: `この日のスタンプ：${[...new Set(stamped.map((s) => s.name))].join("・")}` }) : "",
+      h("div", { class: "btns" }, ...timelinePicker("新しいタイムラインを読み込む")),
+      h("p", { class: "muted", text: "記録はGoogleマップのタイムラインから。読み込みは足し算で、同じ日は新しいほうで置き換わります。" }));
+  });
+}
+
+// 月ごと・手段ごとの移動距離
+async function renderDistance(box) {
+  allDays ||= await db.getAll("days");
+  if (!allDays.length) return;
+  const months = new Map();
+  for (const d of allDays) {
+    const m = d.date.slice(0, 7);
+    const cur = months.get(m) || {};
+    for (const [k, v] of Object.entries(tl.kmByMode(d.acts))) cur[k] = (cur[k] || 0) + v;
+    months.set(m, cur);
+  }
+  const cols = ["train", "car", "walk"];
+  const rows = [...months.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 12);
+  const fmt = (v) => (v ? Math.round(v).toLocaleString() : "–");
+  box.replaceChildren(h("h2", { text: "移動距離（km）" }),
+    h("div", { class: "tablewrap" }, h("table", { class: "dist" },
+      h("thead", {}, h("tr", {}, h("th", { text: "月" }), ...cols.map((c) => h("th", { text: tl.MODES[c].label })), h("th", { text: "合計" }))),
+      h("tbody", {}, rows.map(([m, v]) => h("tr", {},
+        h("td", { text: `${+m.slice(0, 4)}/${+m.slice(5)}` }),
+        ...cols.map((c) => h("td", { text: fmt(v[c]) })),
+        h("td", { text: fmt(Object.entries(v).filter(([k]) => k !== "fly").reduce((a, [, x]) => a + x, 0)) })))))),
+    h("p", { class: "muted", text: "合計に飛行機は入れていません。距離はタイムラインの記録どおりです。" }));
+}
+
 function renderLog(main) {
+  if (dayKeys.length) { const box = h("section", { class: "card dist-card" }); main.append(box); renderDistance(box); }
   if (!visits.length) { main.append(h("p", { class: "empty", text: "まだスタンプがありません。" })); return; }
   const byId = Object.fromEntries(stations.map((s) => [s.id, s]));
   const sorted = [...visits].sort((a, b) => b.at.localeCompare(a.at));
@@ -407,7 +527,11 @@ function renderBackup(main) {
         h("button", { type: "button", class: "primary", onclick: exportJson, text: "書き出す（JSON）" }),
         h("button", { type: "button", onclick: () => file.click(), text: "読み込む" }), file),
       h("p", { class: "muted", text: meta.lastExport ? `最後に書き出した日：${ymd(meta.lastExport)}` : "まだ書き出したことがありません" }),
-      h("p", { class: "muted", text: "読み込みは「足し算」です。今ある記録は消えません。" })),
+      h("p", { class: "muted", text: "読み込みは「足し算」です。今ある記録は消えません。道のりの記録はバックアップに入りません（タイムラインから読み込み直せます）。" })),
+    h("section", { class: "card" },
+      h("h2", { text: "タイムライン" }),
+      h("p", { text: dayKeys.length ? `${dayKeys.length}日分の道のりがあります（${dayKeys[0]}〜${dayKeys.at(-1)}）。` : "まだ読み込んでいません。" }),
+      h("div", { class: "btns" }, ...timelinePicker("タイムラインを読み込む"))),
     h("section", { class: "card" },
       h("h2", { text: "この端末の状態" }),
       h("ul", { class: "facts" },

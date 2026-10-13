@@ -1,2 +1,7 @@
 __pycache__/
 *.tmp
+
+# 個人の行動記録（タイムラインの書き出し）は絶対に入れない
+*imeline*.json
+タイムライン*.json
+location-history*.json

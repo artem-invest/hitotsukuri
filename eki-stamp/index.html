@@ -6,6 +6,7 @@
 <title>駅スタンプ帳</title>
 <!-- PWA：ホーム画面に追加したときの名前・アイコン・色 -->
 <link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="vendor/leaflet.css">
 <meta name="theme-color" content="#f5f0e6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1b1916" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="icons/icon-192.png" type="image/png">
@@ -35,9 +36,9 @@ header.top{display:flex;align-items:baseline;justify-content:space-between;gap:8
 h1{font-family:var(--f);font-weight:800;font-size:1.7rem;letter-spacing:.08em;margin:0}
 #summary{font-size:.8rem;color:var(--muted)}
 #offline{font-size:.75rem;color:var(--paper);background:var(--muted);border-radius:999px;padding:1px 10px}
-.tabs{display:flex;gap:4px;margin:12px 0 4px;border-bottom:1px solid var(--line);
+.tabs{display:flex;gap:2px;overflow-x:auto;margin:12px 0 4px;border-bottom:1px solid var(--line);
   position:sticky;top:env(safe-area-inset-top,0px);background:var(--bg);z-index:2}
-.tabs button{font:inherit;font-weight:700;border:0;background:none;color:var(--muted);padding:8px 12px;border-bottom:3px solid transparent;cursor:pointer}
+.tabs button{flex:none;font:inherit;font-weight:700;border:0;background:none;color:var(--muted);padding:8px 10px;border-bottom:3px solid transparent;cursor:pointer}
 .tabs button[aria-selected="true"]{color:var(--ink-text);border-bottom-color:var(--accent)}
 button{font:inherit;color:inherit;cursor:pointer}
 button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -74,6 +75,22 @@ button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(-
 .sugg b{margin-right:8px}
 .sugg small{color:var(--muted);font-size:.75rem}
 .links{display:flex;gap:16px}
+.daynav{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:14px}
+.daynav input{flex:0 1 11em;text-align:center}
+.daynav button{width:40px;height:40px;border:1px solid var(--line);background:var(--paper);border-radius:10px;font-size:1.2rem}
+.daynav button:disabled{opacity:.35}
+.modes{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:10px 0}
+.modes b{font-family:var(--f);margin-right:4px}
+.chip{font-size:.78rem;font-weight:700;border-radius:999px;padding:1px 10px;color:#fff;background:var(--c)}
+.map{height:62vh;min-height:280px;border-radius:12px;border:1px solid var(--line);overflow:hidden;background:var(--paper)}
+.steps{margin:6px 0;padding-left:1.4em}
+.tablewrap{overflow-x:auto}
+table.dist{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+table.dist th,table.dist td{padding:5px 8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+table.dist th:first-child,table.dist td:first-child{text-align:left}
+table.dist th{font-size:.8rem;color:var(--muted)}
+table.dist td:last-child{font-weight:700}
+.dist-card{margin-top:14px}
 .next{margin-top:24px}
 .next h2{font-family:var(--f);font-size:1.1rem;margin:0}
 .next .muted{margin:0}
@@ -142,6 +159,7 @@ dialog#sheet::backdrop{background:rgba(0,0,0,.4)}
   <nav class="tabs" role="tablist">
     <button type="button" role="tab" data-tab="stamps" aria-selected="true">スタンプ</button>
     <button type="button" role="tab" data-tab="lines" aria-selected="false">路線</button>
+    <button type="button" role="tab" data-tab="map" aria-selected="false">地図</button>
     <button type="button" role="tab" data-tab="log" aria-selected="false">記録</button>
     <button type="button" role="tab" data-tab="backup" aria-selected="false">バックアップ</button>
   </nav>
@@ -149,6 +167,7 @@ dialog#sheet::backdrop{background:rgba(0,0,0,.4)}
 </div>
 <dialog id="sheet"></dialog>
 <div id="toast" class="toast" hidden></div>
+<script src="vendor/leaflet.js"></script>
 <script type="module" src="app.js"></script>
 </body>
 </html>

@@ -3,13 +3,17 @@
 // 2回目からは、しまっておいたものをすぐ返す（電波がなくても開ける）。
 // 裏でネットから最新版を取りに行き、取れたら差し替える（次に開いたときに新しい版になる）。
 
-const VERSION = "eki-stamp-v3"; // アプリ本体を変えたらここを上げる → 古いしまい場所を捨てる
+const VERSION = "eki-stamp-v4"; // アプリ本体を変えたらここを上げる → 古いしまい場所を捨てる
 const SHELL = [
   "./",
   "./index.html",
   "./app.js",
   "./db.js",
   "./geo.js",
+  "./timeline.js",
+  "./map.js",
+  "./vendor/leaflet.js",
+  "./vendor/leaflet.css",
   "./stations.json",
   "./manifest.webmanifest",
   "./icons/icon-192.png",
