@@ -5,7 +5,7 @@ import * as geo from "./geo.js";
 import * as tl from "./timeline.js";
 import { drawDay } from "./map.js";
 
-const APP_VERSION = "1.3.0";
+const APP_VERSION = "1.3.1";
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
 // 朝刊の駅スタンプ帳から引き継いだ記録（2026-10-13時点）。初回起動のときだけ入れる
@@ -190,7 +190,17 @@ async function importTimeline(file) {
   catch { toast("タイムラインの書き出しファイルではありません"); return; }
   if (!days.length) { toast("移動の記録がありませんでした"); return; }
   try { master ||= await geo.loadMaster(); } catch { toast("駅データを読み込めませんでした"); return; }
-  await db.putMany(days.map((d) => ["days", d])); // 同じ日は新しいほうで置き換える
+  // 同じ日がもうあれば、記録が詳しいほう（点と移動の数が多いほう）を残す。
+  // 足し合わせないのは、2台のスマホが同じ移動を記録していると距離が二重になるため
+  const size = (d) => d.pts.length + d.acts.length * 5;
+  const keep = [];
+  let added = 0, replaced = 0;
+  for (const d of days) {
+    const old = dayKeys.includes(d.date) ? await db.get("days", d.date) : null;
+    if (!old) { keep.push(["days", d]); added++; }
+    else if (size(d) > size(old)) { keep.push(["days", d]); replaced++; }
+  }
+  await db.putMany(keep);
   const first = new Map();
   for (const { m, t } of tl.railStops(days, master, geo.STAMP_RADIUS)) {
     const cur = first.get(m.id);
@@ -209,7 +219,8 @@ async function importTimeline(file) {
   await db.setMeta("lastTimeline", new Date().toISOString());
   await load();
   mapDate = dayKeys.at(-1);
-  toast(`${days.length}日分を読み込み、新しい駅 ${newVisits.length} にスタンプを押しました`);
+  const same = days.length - added - replaced;
+  toast(`新しい日 ${added}・詳しい記録に入れ替え ${replaced}・そのまま ${same}。新しい駅 ${newVisits.length} にスタンプ`);
 }
 
 function timelinePicker(label, primary = false) {
@@ -467,7 +478,7 @@ function renderMap(main) {
     below.replaceChildren(
       stamped.length ? h("p", { class: "muted", text: `この日のスタンプ：${[...new Set(stamped.map((s) => s.name))].join("・")}` }) : "",
       h("div", { class: "btns" }, ...timelinePicker("新しいタイムラインを読み込む")),
-      h("p", { class: "muted", text: "記録はGoogleマップのタイムラインから。読み込みは足し算で、同じ日は新しいほうで置き換わります。" }));
+      h("p", { class: "muted", text: "記録はGoogleマップのタイムラインから。読み込みは足し算で、同じ日は記録が詳しいほうが残ります（古いスマホの書き出しも読めます）。" }));
   });
 }
 
