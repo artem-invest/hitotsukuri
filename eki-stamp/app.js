@@ -10,7 +10,7 @@ import { renderReview } from "./review.js";
 import { renderLife } from "./life.js";
 import { lineStyle } from "./linestyle.js";
 
-const APP_VERSION = "2.0.0";
+const APP_VERSION = "2.1.0";
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
 // 朝刊の駅スタンプ帳から引き継いだ記録（2026-10-13時点）。初回起動のときだけ入れる
@@ -41,6 +41,7 @@ const isSpot = (s) => !!rd.KINDS[s?.kind]; // SA・PA・道の駅・銭湯・温
 /* ---------- 状態 ---------- */
 let stations = [];
 let visits = [];
+let pending = [];             // 確認待ちの記録（タイムラインから見つけた施設。本人が「行った」と言うまで図鑑に入れない）
 let meta = { lastExport: null, persisted: "?" };
 let tab = "home";
 let near = { state: "idle" }; // 近くの駅：idle / locating / done / error
@@ -59,7 +60,10 @@ tab = { stamps: "home", log: "review" }[tab] || tab;
 const visitsOf = (id) => visits.filter((v) => v.stationId === id).sort((a, b) => a.at.localeCompare(b.at));
 
 async function load() {
-  [stations, visits] = await Promise.all([db.getAll("stations"), db.getAll("visits")]);
+  let all;
+  [stations, all] = await Promise.all([db.getAll("stations"), db.getAll("visits")]);
+  visits = all.filter((v) => !v.pending);
+  pending = all.filter((v) => v.pending).sort((a, b) => b.at.localeCompare(a.at));
   meta.lastExport = await db.getMeta("lastExport");
   life = (await db.getMeta("life")) || { places: [], candidates: [] };
   dayKeys = (await db.getAllKeys("days")).sort();
@@ -224,25 +228,29 @@ async function importTimeline(file) {
   await load();
   mapDate = dayKeys.at(-1);
   const same = days.length - added - replaced;
-  toast(`新しい日 ${added}・詳しい記録に入れ替え ${replaced}・そのまま ${same}。初めての駅 ${newVisits.length - newSpots}・SA・銭湯など ${newSpots} を図鑑に追加`);
+  toast(`新しい日 ${added}・詳しい記録に入れ替え ${replaced}・そのまま ${same}。初めての駅 ${newVisits.length - newSpots}。確認待ちの施設 ${newSpots}`);
 }
 
-// SA・PA・道の駅：立ち寄った所に、最初の1回だけスタンプ。書き込む visits を out に足し、件数を返す
+// SA・PA・道の駅・銭湯・温泉：立ち寄ったかもしれない所を「確認待ち」にする（最初の1回だけ）。書き込む visits を out に足し、件数を返す
+// 2.1.0 から：滞在の近くにあるだけでは、隣の店や知り合いの家にいたのと見分けられない（実データで、行っていない銭湯が多数入った）。
+// そこで本人が「行った／行ってない」を決める。「行ってない」にした施設は rejected として覚え、二度と出さない
 async function stampSpots(days, out) {
   let n = 0;
   try {
     roads ||= await rd.loadRoads();
     const first = new Map();
-    for (const { spot, t } of rd.spotStops(roads, days)) {
-      const cur = first.get(spot.id);
-      if (!cur || t < cur.t) first.set(spot.id, { spot, t });
+    for (const hit of rd.spotStops(roads, days)) {
+      const cur = first.get(hit.spot.id);
+      if (!cur || hit.t < cur.t) first.set(hit.spot.id, hit);
     }
-    for (const { spot, t } of [...first.values()].sort((a, b) => a.t - b.t)) {
+    for (const { spot, t, mins, dist } of [...first.values()].sort((a, b) => a.t - b.t)) {
+      const known = stations.find((x) => x.id === spot.id);
+      if (known?.rejected || visitsOf(spot.id).length || pending.some((v) => v.stationId === spot.id)) continue;
       const at = new Date(t * 1000).toISOString();
-      const s = await ensureSpot(spot, at.slice(0, 10), "timeline");
-      if (visitsOf(s.id).length) continue;
-      const v = { id: `tl-${spot.id}`, stationId: s.id, at, how: "timeline", lat: null, lng: null, acc: null };
-      visits.push(v);
+      const s = known || (await ensureSpot(spot, at.slice(0, 10), "timeline"));
+      const v = { id: `tl-${spot.id}`, stationId: s.id, at, how: "timeline", lat: null, lng: null, acc: null,
+        pending: true, stay: mins == null ? null : Math.round(mins), dist: Math.round(dist) };
+      pending.push(v);
       out.push(["visits", v]);
       n++;
     }
@@ -259,7 +267,49 @@ async function backfillSpots() {
   const n = await stampSpots(allDays, out);
   await db.putMany(out);
   await db.setMeta("spotScan", 2);
-  if (n) { toast(`これまでの記録から、SA・PA・道の駅・銭湯・温泉 ${n} か所を図鑑に追加しました`); render(); }
+  if (n) { toast(`これまでの記録から、行ったかもしれない施設が ${n} か所見つかりました。「最近」で確かめてください`); render(); }
+}
+
+// 2.0.0 までにタイムラインから自動で入れた施設を、1回だけ確認待ちに戻す
+async function recheckSpotsOnce() {
+  if ((await db.getMeta("spotConfirm")) === 1) return;
+  const back = visits.filter((v) => v.how === "timeline" && isSpot(stations.find((s) => s.id === v.stationId)));
+  for (const v of back) v.pending = true;
+  await db.putMany(back.map((v) => ["visits", v]));
+  await db.setMeta("spotConfirm", 1);
+  if (back.length) await load();
+}
+
+// 確認：行った → 図鑑へ。行ってない → 記録を消し、その施設を二度と出さない
+async function confirmSpot(v, went) {
+  const s = stations.find((x) => x.id === v.stationId);
+  if (went) {
+    v.pending = false;
+    await db.put("visits", v);
+  } else {
+    await db.remove("visits", v.id);
+    if (s) { s.rejected = true; await db.put("stations", s); }
+  }
+  await load();
+  toast(went ? `${s?.name || ""} を図鑑に入れました` : `${s?.name || ""} は外しました（次から出しません）`);
+}
+
+function renderConfirm() {
+  if (!pending.length) return null;
+  return h("section", { class: "card confirm" },
+    h("h2", { text: `行ったか確かめてください（${pending.length}件）` }),
+    h("p", { class: "muted", text: "タイムラインで近くに長めにいた施設です。隣のお店や家にいただけのこともあるので、行った所だけ「行った」を押してください。" }),
+    h("ol", { class: "nearlist" }, pending.map((v) => {
+      const s = stations.find((x) => x.id === v.stationId);
+      if (!s) return null;
+      const info = [rd.KINDS[s.kind]?.label, ymd(v.at), v.stay != null ? `${v.stay}分いた` : "", v.dist != null ? `${v.dist}m` : ""].filter(Boolean).join("・");
+      return h("li", {},
+        h("div", {}, h("b", { text: s.name }), h("small", {},
+          info + "　", h("a", { href: `https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`, target: "_blank", rel: "noopener", text: "地図" }))),
+        h("div", { class: "yn" },
+          h("button", { type: "button", class: "primary", text: "行った", onclick: () => confirmSpot(v, true) }),
+          h("button", { type: "button", text: "行ってない", onclick: () => confirmSpot(v, false) })));
+    })));
 }
 
 function timelinePicker(label, primary = false) {
@@ -270,7 +320,7 @@ function timelinePicker(label, primary = false) {
 
 /* ---------- バックアップ（JSONの書き出し・読み込み） ---------- */
 async function exportJson() {
-  const data = { app: "eki-stamp", format: 1, exportedAt: new Date().toISOString(), stations, visits };
+  const data = { app: "eki-stamp", format: 1, exportedAt: new Date().toISOString(), stations, visits: [...visits, ...pending] };
   const name = `eki-stamp-${today()}.json`;
   const file = new File([JSON.stringify(data, null, 2)], name, { type: "application/json" });
   let shared = false;
@@ -479,7 +529,7 @@ function renderLines(main) {
 
 /* ---------- 最近のあしあと（最初の画面） ---------- */
 function renderHome(main) {
-  main.append(backupNudge() || "");
+  main.append(backupNudge() || "", renderConfirm() || "");
   if (dayKeys.length && (!allDays || (!roads && !summaryTried))) {
     main.append(h("p", { class: "empty", text: "記録を集計しています…" }));
     ensureAll().then(() => { if (tab === "home") render(); });
@@ -543,6 +593,7 @@ function ensureAll() {
 
 /* ---------- あしあと図鑑 ---------- */
 function renderZukan(main) {
+  main.append(renderConfirm() || "");
   const mine = stations.filter((s) => visitsOf(s.id).length);
   if (!mine.length) {
     main.append(h("p", { class: "empty", text: "まだありません。タイムラインを読み込むか、駅で「今いる場所を記録する」を押すと、初めて行った駅や施設がここに並びます。" }));
@@ -816,6 +867,6 @@ if ("serviceWorker" in navigator) {
   meta.persisted = await askPersist().catch(() => "unsupported");
   if (tab === "backup") render();
   try { master = await geo.loadMaster(); await linkMaster(); render(); await loadRides(); render(); } catch {}
-  try { await backfillSpots(); } catch {}
+  try { await recheckSpotsOnce(); render(); await backfillSpots(); } catch {}
   if (await geo.permitted()) findNear(); // 許可済みなら、開いたときに自動で探す
 })();

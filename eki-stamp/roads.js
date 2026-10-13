@@ -124,20 +124,20 @@ export function splitCar(r, day) {
   return { hw: Math.round(hw * 10) / 10, general: Math.round(general * 10) / 10, names: [...names], segs };
 }
 
-// 立ち寄った SA・PA・道の駅 [{spot, t}]
+// 立ち寄ったかもしれない SA・PA・道の駅・銭湯・温泉 [{spot, t, mins(滞在分・発着地点はnull), dist(m)}]
 // 手がかりは「滞在」と「車の移動の出発・到着地点」。短い休憩は滞在として残らないことが多いため（実データで確認）
 // 銭湯・温泉は「滞在」だけを見て、種類ごとの距離と滞在時間（KINDS.minStay）を満たすものに限る
 export function spotStops(r, days) {
   const out = [];
   const road = (s) => KINDS[s.kind].group === "road";
-  const hit = (la, lo, t, ok) => {
+  const hit = (la, lo, t, ok, mins = null) => {
     const s = nearestSpot(r, la, lo, null, ok);
-    if (s && !s.name.includes("大型")) out.push({ spot: s, t });
+    if (s && !s.name.includes("大型")) out.push({ spot: s, t, mins, dist: s.dist });
   };
   for (const d of days) {
     for (const st of d.stays) {
       const mins = (st.e - st.s) / 60;
-      hit(st.at[0], st.at[1], st.s, (s) => mins >= KINDS[s.kind].minStay);
+      hit(st.at[0], st.at[1], st.s, (s) => mins >= KINDS[s.kind].minStay, mins);
     }
     for (const a of d.acts) if (a.mode === "car") { hit(a.a[0], a.a[1], a.s, road); hit(a.b[0], a.b[1], a.e, road); }
   }
