@@ -1,0 +1,14 @@
+# ひと作り
+
+寝る前の30〜60分で、AIと作った小さな道具たち。
+
+**公開URL：https://artem-invest.github.io/hitotsukuri/**
+
+| 作品 | URL | ひとこと |
+|---|---|---|
+| 駅スタンプ帳 | https://artem-invest.github.io/hitotsukuri/eki-stamp/ | 行った駅にスタンプ。PWA（ホーム画面に追加・オフラインで開ける・JSONでバックアップ） |
+| 高速道路IC当てクイズ | https://artem-invest.github.io/hitotsukuri/ic-quiz/ | 路線を選んで、IC・JCTの順番を当てる |
+| 焚き火タイマー | https://artem-invest.github.io/hitotsukuri/takibi-timer/ | ぱちぱち燃える焚き火を10分間眺める |
+| 旬の魚図鑑 | https://artem-invest.github.io/hitotsukuri/sashimi-calendar/ | 月ごとの旬の魚と、柵の選び方・刺身の食べ方 |
+
+どれもビルド不要のHTML/CSS/JavaScriptだけで動く。`main` ブランチがそのまま GitHub Pages で公開される。
