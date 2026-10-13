@@ -81,6 +81,47 @@ export function railStops(days, master, radius) {
   return out;
 }
 
+// 乗った区間（乗りつぶし）：電車の移動1回ごとに、乗った駅と降りた駅が同じ路線にあれば、その間の駅を「通った」とする
+// 返り値 [{li: 路線番号, ids: [駅ID...（乗った駅〜降りた駅）], date}]
+export function railRides(days, master, radius) {
+  const pos = (id) => (master.byId[id].c ||= geo.center(master.byId[id]));
+  const gap = (x, y) => { const p = pos(x), q = pos(y); return geo.distance(p.lat, p.lng, q.lat, q.lng) / 1000; };
+  const segKm = (ids) => ids.slice(1).reduce((s, id, k) => s + gap(ids[k], id), 0);
+  // 環状線（端と端が3km以内）なら、逆回りも候補にする
+  const isLoop = (ids) => ids.length >= 8 && gap(ids[0], ids.at(-1)) < 3;
+  const routes = (ids, i, j) => {
+    const out = [i < j ? ids.slice(i, j + 1) : ids.slice(j, i + 1).reverse()];
+    if (isLoop(ids)) {
+      const n = ids.length, step = i < j ? -1 : 1, r = [];
+      for (let k = i; ; k = (k + step + n) % n) { r.push(ids[k]); if (k === j) break; }
+      out.push(r);
+    }
+    return out;
+  };
+  const rides = [];
+  for (const d of days) {
+    for (const a of d.acts) {
+      if (a.mode !== "train") continue;
+      const A = geo.nearest(master, a.a[0], a.a[1], 1)[0];
+      const B = geo.nearest(master, a.b[0], a.b[1], 1)[0];
+      if (!A || !B || A.dist > radius || B.dist > radius || A.id === B.id) continue;
+      let best = null;
+      for (const li of A.li) {
+        if (!B.li.includes(li)) continue;
+        const ids = master.lines[li].ids;
+        for (const r of routes(ids, ids.indexOf(A.id), ids.indexOf(B.id))) {
+          const km = segKm(r);
+          if (!best || km < best.km) best = { li, ids: r, km };
+        }
+      }
+      // 線路沿いの距離が記録の距離より極端に長いもの（乗り換えを含む移動・並び順の推定違い）は使わない
+      const ref = Math.max(a.km, gap(A.id, B.id));
+      if (best && best.km <= ref * 1.5 + 2) rides.push({ li: best.li, ids: best.ids, date: d.date });
+    }
+  }
+  return rides;
+}
+
 // 1日の道のりを、手段ごとに色を分けた線の集まりにする
 // 道のりの点に移動の始点・終点を足して時刻順に並べ、隣り合う2点の間を「その時刻の移動手段」で塗る
 export function dayLines(d) {

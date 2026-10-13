@@ -105,7 +105,15 @@ details.line summary::-webkit-details-marker{display:none}
 details.line .ln{font-family:var(--f);font-weight:800;font-size:1.05rem}
 details.line .cnt{font-family:ui-monospace,Menlo,monospace;font-weight:700;color:var(--muted)}
 details.line .bar{grid-column:1/-1;height:6px;border-radius:3px;background:var(--line);overflow:hidden}
-details.line .bar i{display:block;height:100%;background:var(--accent);border-radius:3px}
+details.line .bar{display:flex}
+details.line .bar i{display:block;height:100%;background:var(--accent)}
+details.line .bar i.via{background:color-mix(in srgb,var(--accent) 35%,transparent)}
+details.line .sub{grid-column:1/-1;color:var(--muted);font-size:.75rem}
+.dots li.via{border:1.5px solid color-mix(in srgb,var(--accent) 55%,transparent);background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--ink-text)}
+.legend{display:flex;gap:6px;margin:0 0 4px;font-size:.75rem}
+.legend span{border:1.5px dashed var(--empty);color:var(--muted);border-radius:999px;padding:0 8px}
+.legend .on{border:1.5px solid var(--accent);background:var(--accent);color:#fff}
+.legend .via{border:1.5px solid color-mix(in srgb,var(--accent) 55%,transparent);background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--ink-text)}
 details.line.full{border-color:var(--accent)}
 details.line.full .cnt{color:var(--accent)}
 .dots{list-style:none;margin:12px 0 2px;padding:0;display:flex;flex-wrap:wrap;gap:6px}

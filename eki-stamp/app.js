@@ -5,7 +5,7 @@ import * as geo from "./geo.js";
 import * as tl from "./timeline.js";
 import { drawDay } from "./map.js";
 
-const APP_VERSION = "1.3.1";
+const APP_VERSION = "1.4.0";
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
 // 朝刊の駅スタンプ帳から引き継いだ記録（2026-10-13時点）。初回起動のときだけ入れる
@@ -67,7 +67,8 @@ let near = { state: "idle" }; // 近くの駅：idle / locating / done / error
 let master = null;            // 全国の駅データ（geo.loadMaster）
 let dayKeys = [];             // タイムラインの記録がある日（"YYYY-MM-DD" の昇順）
 let mapDate = null;           // 地図で見ている日
-let allDays = null;           // 月ごとの距離を出すときにだけ全日分を読む
+let allDays = null;           // 月ごとの距離・乗った区間を出すときにだけ全日分を読む
+let rides = null;             // 乗った区間 {byLine: Map(路線番号 → Set(駅ID)), count}。タイムラインから計算
 try { tab = localStorage.getItem("eki.tab") || "stamps"; } catch {}
 
 const visitsOf = (id) => visits.filter((v) => v.stationId === id).sort((a, b) => a.at.localeCompare(b.at));
@@ -77,6 +78,7 @@ async function load() {
   meta.lastExport = await db.getMeta("lastExport");
   dayKeys = (await db.getAllKeys("days")).sort();
   allDays = null;
+  rides = null;
   render();
 }
 
@@ -333,17 +335,34 @@ function renderNear() {
 // 押した駅（全国データと結びついたもの）の集合
 const visitedGids = () => new Set(stations.filter((s) => s.gid && visitsOf(s.id).length).map((s) => s.gid));
 
-// 押した駅が1つでもある路線と、その埋まり具合
+// 乗った区間をタイムラインから計算する（全日分を読むので、必要になったときに1回だけ）
+async function loadRides() {
+  if (rides || !dayKeys.length || !master) return;
+  allDays ||= await db.getAll("days");
+  const byLine = new Map();
+  const list = tl.railRides(allDays, master, geo.STAMP_RADIUS);
+  for (const r of list) {
+    const set = byLine.get(r.li) || new Set();
+    for (const id of r.ids) set.add(id);
+    byLine.set(r.li, set);
+  }
+  rides = { byLine, count: list.length };
+}
+
+// 降りた駅か通った区間が1つでもある路線と、その埋まり具合
+// done＝降りた駅、via＝通っただけの駅（降りた駅は含まない）
 function myLines() {
   if (!master) return [];
   const got = visitedGids();
-  const touched = new Set();
+  const touched = new Set(rides ? rides.byLine.keys() : []);
   for (const g of got) for (const i of master.byId[g]?.li || []) touched.add(i);
   return [...touched].map((i) => {
     const l = master.lines[i];
+    const rode = rides?.byLine.get(i) || new Set();
     const done = l.ids.filter((id) => got.has(id)).length;
-    return { ...l, done, total: l.ids.length, left: l.ids.length - done };
-  }).sort((a, b) => b.done / b.total - a.done / a.total || a.left - b.left);
+    const via = l.ids.filter((id) => !got.has(id) && rode.has(id)).length;
+    return { ...l, rode, done, via, total: l.ids.length, left: l.ids.length - done };
+  }).sort((a, b) => (b.done + b.via) / b.total - (a.done + a.via) / a.total || b.done - a.done);
 }
 
 // 次の一駅：自分の路線のまだの駅を、今いる所（無ければ最後に押した駅）から近い順に
@@ -365,7 +384,7 @@ function nextStations(n = 3) {
       const d = Math.min(...m.pts.map((p) => geo.distance(from.lat, from.lng, p[1], p[0])));
       const cur = seen.get(id);
       // 同じ駅が複数の路線にあるときは、残りの少ない（制覇に近い）路線で紹介する
-      if (!cur || l.left < cur.line.left) seen.set(id, { m, d, line: l });
+      if (!cur || l.left < cur.line.left) seen.set(id, { m, d, line: l, via: l.rode.has(id) || cur?.via });
     }
   }
   return { from, list: [...seen.values()].sort((a, b) => a.d - b.d).slice(0, n) };
@@ -377,12 +396,17 @@ function renderNext() {
   return h("section", { class: "next" },
     h("h2", { text: "次の一駅" }),
     h("p", { class: "muted", text: `${from.label}から近い、あなたの路線のまだ降りていない駅` }),
-    h("ol", { class: "nearlist" }, list.map(({ m, d, line }) => h("li", {},
-      h("div", {}, h("b", { text: m.name }), h("small", { text: `${line.name} あと${line.left}駅で制覇・${meters(d)}` })),
+    h("ol", { class: "nearlist" }, list.map(({ m, d, line, via }) => h("li", {},
+      h("div", {}, h("b", { text: m.name }), h("small", { text: `${line.name} あと${line.left}駅で制覇・${meters(d)}${via ? "・通ったことはある" : ""}` })),
       h("a", { class: "maplink", href: `https://www.google.com/maps/search/?api=1&query=${geo.center(m).lat},${geo.center(m).lng}`, target: "_blank", rel: "noopener", text: "地図" })))));
 }
 
 function renderLines(main) {
+  if (dayKeys.length && !rides) {
+    main.append(h("p", { class: "empty", text: "乗った区間を計算しています…" }));
+    loadRides().then(() => { if (tab === "lines") render(); });
+    return;
+  }
   const lines = myLines();
   if (!lines.length) {
     main.append(h("p", { class: "empty", text: "駅でスタンプを押すと、その駅を通る路線がここに並びます。全駅で降りたら「制覇」です。" }));
@@ -390,18 +414,22 @@ function renderLines(main) {
   }
   const got = visitedGids();
   const full = lines.filter((l) => l.left === 0).length;
-  main.append(h("p", { class: "linesum" }, h("b", { text: `${lines.length}路線` }), ` に足あと・制覇 ${full}路線`));
+  const rodeAll = lines.filter((l) => l.done + l.via === l.total).length;
+  main.append(h("p", { class: "linesum" }, h("b", { text: `${lines.length}路線` }), ` に足あと・降りて制覇 ${full}・乗りつぶし ${rodeAll}`));
+  main.append(h("p", { class: "legend" },
+    h("span", { class: "on", text: "降りた" }), h("span", { class: "via", text: "通った" }), h("span", { text: "まだ" })));
   for (const l of lines) {
-    const pct = Math.round((l.done / l.total) * 100);
+    const pct = (n) => Math.round((n / l.total) * 1000) / 10;
     const d = h("details", { class: "line" + (l.left === 0 ? " full" : "") },
       h("summary", {},
         h("span", { class: "ln", text: l.name }),
         h("span", { class: "cnt", text: l.left === 0 ? "制覇！" : `${l.done}/${l.total}` }),
-        h("span", { class: "bar" }, h("i", { style: `width:${pct}%` }))),
-      h("ol", { class: "dots" }, l.ids.map((id) => h("li", { class: got.has(id) ? "on" : "" }, master.byId[id].name))));
+        h("span", { class: "bar" }, h("i", { style: `width:${pct(l.done)}%` }), h("i", { class: "via", style: `width:${pct(l.via)}%` })),
+        l.via ? h("small", { class: "sub", text: `通った駅を入れると ${l.done + l.via}/${l.total}${l.done + l.via === l.total ? "（乗りつぶし）" : ""}` }) : null),
+      h("ol", { class: "dots" }, l.ids.map((id) => h("li", { class: got.has(id) ? "on" : l.rode.has(id) ? "via" : "" }, master.byId[id].name))));
     main.append(d);
   }
-  main.append(h("p", { class: "hint", text: "路線をタップすると、端から順に駅が並びます（色つき＝降りた駅）。支線のある路線は順番が少し前後します。" }));
+  main.append(h("p", { class: "hint", text: "路線をタップすると、端から順に駅が並びます。「通った」はタイムラインの電車の乗り降りから計算した区間です（乗り換えを含む移動は使っていません）。支線のある路線は順番が少し前後します。" }));
 }
 
 function renderStamps(main) {
@@ -628,6 +656,6 @@ if ("serviceWorker" in navigator) {
   }
   meta.persisted = await askPersist().catch(() => "unsupported");
   if (tab === "backup") render();
-  try { master = await geo.loadMaster(); await linkMaster(); render(); } catch {}
+  try { master = await geo.loadMaster(); await linkMaster(); render(); await loadRides(); render(); } catch {}
   if (await geo.permitted()) findNear(); // 許可済みなら、開いたときに自動で探す
 })();
