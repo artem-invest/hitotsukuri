@@ -1,7 +1,7 @@
 {
-  "name": "駅スタンプ帳",
-  "short_name": "駅スタンプ",
-  "description": "行った駅にスタンプを押していく帳面",
+  "name": "あしあと帳",
+  "short_name": "あしあと帳",
+  "description": "行った駅・施設、通った道のりが自動でたまる手帳",
   "id": "./",
   "start_url": "./",
   "scope": "./",

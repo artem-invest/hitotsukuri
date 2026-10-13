@@ -1,6 +1,6 @@
-"""駅スタンプ帳のアイコンを描く（外部画像は使わない）。
+"""あしあと帳（もとは駅スタンプ帳）のアイコンを描く（外部画像は使わない）。
 
-和紙色の地に、朱色の二重丸の判子で「駅」。
+和紙色の地に、朱色の二重丸の判子で「足」。
 python -X utf8 tools/make_icons.py で eki-stamp/icons/ に書き出す。
 """
 from pathlib import Path
@@ -34,7 +34,7 @@ def draw(size, scale):
     r2 = r * 0.84
     d.ellipse([c - r2, c - r2, c + r2, c + r2], outline=INK, width=round(w * 0.45))
     f = font(round(r * 1.05))
-    d.text((c, c + r * 0.02), "駅", font=f, fill=INK, anchor="mm")
+    d.text((c, c + r * 0.02), "足", font=f, fill=INK, anchor="mm")
     img = img.rotate(-8, resample=Image.BICUBIC, fillcolor=PAPER)  # 判子らしく少し傾ける
     return img.resize((size, size), Image.LANCZOS)
 

@@ -1,5 +1,6 @@
 // 家探し：よく行く場所（タイムラインの滞在）から、候補の駅ごとの「月あたりの移動時間の目安」を比べる
 // 場所の名前・大事さ・候補の駅は、このスマホの中（meta の "life"）にだけ保存する。
+// 町名は国土地理院の住所検索（逆ジオコーダ）で調べる。送るのは場所の緯度経度だけで、結果は life.addr に覚えておく
 import { h, km } from "./ui.js";
 import * as geo from "./geo.js";
 
@@ -56,7 +57,47 @@ export function attach(places, saved) {
   });
 }
 
-// app: { allDays, master, life: {places:[], candidates:[]}, save(life), monthsSpan }
+/* ---------- 町名（国土地理院の住所検索） ---------- */
+const akey = (p) => `${p.lat.toFixed(3)},${p.lng.toFixed(3)}`;
+let munis = null;
+const asking = new Set();
+async function lookup(p) {
+  munis ||= await fetch("./munis.json").then((r) => r.json());
+  const r = await fetch(`https://mreversegeocoder.gsi.go.jp/reverse-geocoder/LonLatToAddress?lat=${p.lat.toFixed(5)}&lon=${p.lng.toFixed(5)}`).then((x) => x.json());
+  const c = r?.results;
+  return c ? `${munis[String(parseInt(c.muniCd, 10))] || ""}${c.lv01Nm === "－" ? "" : c.lv01Nm || ""}` : "";
+}
+// まだ町名の無い場所をまとめて調べ、終わったら1回だけ保存する
+async function fillAddresses(places, app) {
+  if (!navigator.onLine) return;
+  const todo = places.filter((p) => !app.life.addr?.[akey(p)] && !asking.has(akey(p)));
+  if (!todo.length) return;
+  todo.forEach((p) => asking.add(akey(p)));
+  const addr = { ...(app.life.addr || {}) };
+  for (const p of todo) {
+    try { addr[akey(p)] = await lookup(p); } catch { /* 取れなければ次に開いたときに再挑戦 */ }
+  }
+  todo.forEach((p) => asking.delete(akey(p)));
+  app.save({ ...app.life, addr });
+}
+
+/* ---------- よく行く場所の地図（番号つきのピン） ---------- */
+let pmap = null;
+function drawPlaces(el, places) {
+  const L = window.L;
+  if (!L) return;
+  if (pmap) { pmap.remove(); pmap = null; }
+  pmap = L.map(el, { zoomControl: false, attributionControl: true });
+  L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png", {
+    maxZoom: 18, attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル</a>',
+  }).addTo(pmap);
+  places.forEach((p, i) => L.marker([p.lat, p.lng], {
+    icon: L.divIcon({ className: "", html: `<span class="numpin${p.home ? " home" : ""}">${i + 1}</span>`, iconSize: null }),
+  }).addTo(pmap));
+  pmap.fitBounds(places.map((p) => [p.lat, p.lng]), { padding: [20, 20], maxZoom: 14 });
+}
+
+// app: { allDays, master, life: {places:[], candidates:[], addr:{}}, save(life), monthsSpan }
 export function renderLife(main, app) {
   const { allDays, master } = app;
   if (!allDays.length || !master) {
@@ -80,9 +121,11 @@ export function renderLife(main, app) {
   };
 
   // 1. よく行く場所
+  const mapBox = h("div", { class: "placemap" });
   main.append(h("section", { class: "card" },
     h("h2", { text: "よく行く場所" }),
     h("p", { class: "muted", text: `タイムラインの滞在から、行った日数の多い順に${found.length}か所。名前と大事さを付けると、下の比較に使われます。` }),
+    mapBox,
     h("ol", { class: "places" }, found.map((p, i) => {
       const st = nearSt(p);
       const hint = p === homeGuess ? "自宅？" : p === workGuess ? "職場？" : "";
@@ -93,13 +136,18 @@ export function renderLife(main, app) {
         WEIGHTS.map(([v, t]) => h("option", { value: v, selected: v === p.weight, text: t })));
       const home = h("label", { class: "homechk" },
         h("input", { type: "checkbox", checked: p.home, onchange: (e) => save(p, { home: e.target.checked }) }), "今の家");
+      const addr = life.addr?.[akey(p)];
       return h("li", {},
         h("div", { class: "pl-head" },
-          h("b", { text: `${i + 1}` }),
-          h("span", { text: `${st ? `${st.name}駅から${km(st.dist / 1000)}km` : ""}・${p.days}日（月${(p.days / months).toFixed(1)}日）${pattern ? "・" + pattern : ""}` })),
+          h("b", { class: "numpin" + (p.home ? " home" : ""), text: `${i + 1}` }),
+          h("div", {},
+            h("strong", { text: addr || (navigator.onLine ? "町名を調べています…" : "（町名はオンラインのときに調べます）") }),
+            h("span", { text: `${st ? `${st.name}駅から${km(st.dist / 1000)}km・` : ""}${p.days}日（月${(p.days / months).toFixed(1)}日）${pattern ? "・" + pattern : ""}` }),
+            h("a", { href: `https://www.google.com/maps/search/?api=1&query=${p.lat.toFixed(5)},${p.lng.toFixed(5)}`, target: "_blank", rel: "noopener", text: "Googleマップで見る" }))),
         h("div", { class: "row" }, name, wt, home));
     })),
-    h("p", { class: "muted", text: "「今の家」に印を付けた場所は比較から外し、今の家からの時間として並べます。" })));
+    h("p", { class: "muted", text: "「今の家」に印を付けた場所は比較から外し、今の家からの時間として並べます。町名は国土地理院の住所検索で調べています（送るのは場所の緯度経度だけ）。" })));
+  if (found.length) { drawPlaces(mapBox, found); fillAddresses(found, app); }
 
   // 2. 候補の駅
   const cands = life.candidates.map((id) => master.byId[id]).filter(Boolean);
@@ -140,7 +188,7 @@ export function renderLife(main, app) {
         targets.map((p) => {
           const cs = cols.map((c) => cell(c, p));
           const minI = cs.indexOf(cs.reduce((a, b) => (b.min < a.min ? b : a)));
-          return h("tr", {}, h("td", { text: p.name || `${nearSt(p)?.name || ""}付近` }),
+          return h("tr", {}, h("td", { text: p.name || life.addr?.[akey(p)] || `${nearSt(p)?.name || ""}付近` }),
             cs.map((x, i) => h("td", { class: i === minI ? "best" : "", text: `${x.min}分` }, h("small", { text: `${km(x.d)}km` }))));
         }),
         h("tr", { class: "sumrow" }, h("td", { text: "月の移動時間（重み付き）" }),

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>駅スタンプ帳</title>
+<title>あしあと帳</title>
 <!-- PWA：ホーム画面に追加したときの名前・アイコン・色 -->
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="stylesheet" href="vendor/leaflet.css">
@@ -13,10 +13,10 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="駅スタンプ">
+<meta name="apple-mobile-web-app-title" content="あしあと帳">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <style>
-/* 和紙のスタンプ帳。押した駅はインクの色で少し傾いた判子になる */
+/* 和紙のあしあと帳。初めて行った駅・施設はインクの色で少し傾いた判子になる */
 :root{
   --bg:#f5f0e6; --paper:#fffdf8; --ink-text:#2a2622; --muted:#7b7266; --line:#ddd3c2;
   --accent:#c8432b; --empty:#b9ae9c;
@@ -149,9 +149,42 @@ details.line summary::-webkit-details-marker{display:none}
 details.line .ln{font-family:var(--f);font-weight:800;font-size:1.05rem}
 details.line .cnt{font-family:ui-monospace,Menlo,monospace;font-weight:700;color:var(--muted)}
 details.line .bar{grid-column:1/-1;height:6px;border-radius:3px;background:var(--line);overflow:hidden}
-details.line .bar{display:flex}
-details.line .bar i{display:block;height:100%;background:var(--accent)}
-details.line .bar i.via{background:color-mix(in srgb,var(--accent) 35%,transparent)}
+details.line{--lc:var(--accent);border-left:6px solid var(--lc)}
+details.line summary{grid-template-columns:auto 1fr auto}
+.lbadge{grid-row:span 2;align-self:center;display:inline-grid;place-items:center;min-width:2.3em;height:2.3em;padding:0 3px;border-radius:50%;border:4px solid var(--lc);background:var(--paper);font:800 .8rem/1 system-ui,sans-serif;letter-spacing:-.03em;color:var(--ink-text)}
+details.line .bar{display:flex;grid-column:2/-1}
+details.line .sub{grid-column:2/-1}
+details.line .bar i{display:block;height:100%;background:var(--lc)}
+details.line .bar i.via{background:color-mix(in srgb,var(--lc) 35%,transparent)}
+details.line.full{border-color:var(--lc);box-shadow:0 0 0 2px var(--lc) inset}
+.route{list-style:none;margin:14px 0 4px;padding:0;display:flex;flex-wrap:wrap;row-gap:10px}
+.route li{position:relative;width:4.4em;display:flex;flex-direction:column;align-items:center;text-align:center}
+.route li::before{content:"";position:absolute;top:7px;left:0;right:0;height:5px;background:var(--lc);opacity:.35}
+.route li:first-child::before{left:50%}
+.route li:last-child::before{right:50%}
+.route li i{position:relative;width:16px;height:16px;border-radius:50%;border:3px solid var(--empty);background:var(--paper);box-sizing:border-box}
+.route li.via i{border-color:var(--lc);background:color-mix(in srgb,var(--lc) 30%,var(--paper))}
+.route li.on i{border-color:var(--lc);background:var(--lc);width:18px;height:18px;margin-top:-1px}
+.route li span{font-size:.68rem;line-height:1.25;margin-top:3px;color:var(--muted);overflow-wrap:anywhere}
+.route li.on span{color:var(--ink-text);font-weight:700}
+.legend span{display:inline-flex;align-items:center;gap:4px;border:0;padding:0 6px 0 0;background:none!important;color:var(--muted)!important}
+.legend i{width:12px;height:12px;border-radius:50%;border:2.5px solid var(--empty);background:var(--paper)}
+.legend .on i{border-color:var(--accent);background:var(--accent)}
+.legend .via i{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 30%,var(--paper))}
+.recent{list-style:none;margin:6px 0 0;padding:0}
+.recent button{width:100%;text-align:left;background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-top:8px}
+.recent b{font-family:var(--f)}
+.recent .modes{margin:4px 0 0}
+.recent small{display:block;color:var(--muted);font-size:.75rem;margin-top:4px}
+details.gps{margin-top:20px}
+.placemap{height:240px;border-radius:10px;border:1px solid var(--line);overflow:hidden;margin:8px 0}
+.numpin{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font:800 12px/1 system-ui,sans-serif;border:2px solid #fff;transform:translate(-50%,-50%)}
+.pl-head .numpin{transform:none;flex:none;margin-top:2px}
+.numpin.home{background:#1d3f8f}
+.pl-head{align-items:flex-start}
+.pl-head strong{display:block;color:var(--ink-text);font-size:.92rem}
+.pl-head span{display:block}
+.pl-head a{font-size:.75rem;color:var(--accent)}
 details.line .sub{grid-column:1/-1;color:var(--muted);font-size:.75rem}
 .dots li.via{border:1.5px solid color-mix(in srgb,var(--accent) 55%,transparent);background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--ink-text)}
 .legend{display:flex;gap:6px;margin:0 0 4px;font-size:.75rem}
@@ -204,18 +237,18 @@ dialog#sheet::backdrop{background:rgba(0,0,0,.4)}
 <body>
 <div class="wrap">
   <header class="top">
-    <h1>駅スタンプ帳</h1>
+    <h1>あしあと帳</h1>
     <span id="offline" hidden>オフライン</span>
     <span id="summary"></span>
   </header>
   <nav class="tabs" role="tablist">
-    <button type="button" role="tab" data-tab="stamps" aria-selected="true">スタンプ</button>
+    <button type="button" role="tab" data-tab="home" aria-selected="true">最近</button>
+    <button type="button" role="tab" data-tab="zukan" aria-selected="false">図鑑</button>
     <button type="button" role="tab" data-tab="lines" aria-selected="false">路線</button>
     <button type="button" role="tab" data-tab="map" aria-selected="false">地図</button>
-    <button type="button" role="tab" data-tab="log" aria-selected="false">記録</button>
     <button type="button" role="tab" data-tab="review" aria-selected="false">年報</button>
     <button type="button" role="tab" data-tab="life" aria-selected="false">家探し</button>
-    <button type="button" role="tab" data-tab="backup" aria-selected="false">バックアップ</button>
+    <button type="button" role="tab" data-tab="backup" aria-selected="false">設定</button>
   </nav>
   <main id="main"><p class="empty">読み込んでいます…</p></main>
 </div>

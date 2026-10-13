@@ -1,4 +1,4 @@
-// 駅スタンプ帳：画面と操作
+// あしあと帳（もとは駅スタンプ帳）：画面と操作
 // データの流れ： IndexedDB（db.js）→ stations / visits の配列 → render() で画面を作り直す
 import * as db from "./db.js";
 import * as geo from "./geo.js";
@@ -8,8 +8,9 @@ import * as rd from "./roads.js";
 import { $, h, md, ymd, localDay, today, meters, toast } from "./ui.js";
 import { renderReview } from "./review.js";
 import { renderLife } from "./life.js";
+import { lineStyle } from "./linestyle.js";
 
-const APP_VERSION = "1.6.0";
+const APP_VERSION = "2.0.0";
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
 // 朝刊の駅スタンプ帳から引き継いだ記録（2026-10-13時点）。初回起動のときだけ入れる
@@ -41,7 +42,7 @@ const isSpot = (s) => !!rd.KINDS[s?.kind]; // SA・PA・道の駅・銭湯・温
 let stations = [];
 let visits = [];
 let meta = { lastExport: null, persisted: "?" };
-let tab = "stamps";
+let tab = "home";
 let near = { state: "idle" }; // 近くの駅：idle / locating / done / error
 let master = null;            // 全国の駅データ（geo.loadMaster）
 let dayKeys = [];             // タイムラインの記録がある日（"YYYY-MM-DD" の昇順）
@@ -51,7 +52,9 @@ let roads = null;              // SA・PA・道の駅と高速道路（rd.loadRo
 let reviewYear = null;        // 年報で見ている年
 let life = { places: [], candidates: [] }; // 家探し：場所の名前・大事さ・候補の駅（meta "life"）
 let rides = null;             // 乗った区間 {byLine: Map(路線番号 → Set(駅ID)), count}。タイムラインから計算
-try { tab = localStorage.getItem("eki.tab") || "stamps"; } catch {}
+try { tab = localStorage.getItem("eki.tab") || "home"; } catch {}
+// 2.0.0 でタブを組み替えた（スタンプ→最近・図鑑、記録→年報と図鑑へ）
+tab = { stamps: "home", log: "review" }[tab] || tab;
 
 const visitsOf = (id) => visits.filter((v) => v.stationId === id).sort((a, b) => a.at.localeCompare(b.at));
 
@@ -106,7 +109,7 @@ async function addVisit(station, pos = null) {
     how: pos ? "gps" : "tap", lat: pos?.lat ?? null, lng: pos?.lng ?? null, acc: pos ? Math.round(pos.acc) : null };
   await db.put("visits", v);
   visits.push(v);
-  toast(`${station.name} にスタンプを押しました`);
+  toast(`${station.name} を記録しました`);
   render();
 }
 
@@ -221,7 +224,7 @@ async function importTimeline(file) {
   await load();
   mapDate = dayKeys.at(-1);
   const same = days.length - added - replaced;
-  toast(`新しい日 ${added}・詳しい記録に入れ替え ${replaced}・そのまま ${same}。新しい駅 ${newVisits.length - newSpots}・SA・銭湯など ${newSpots} にスタンプ`);
+  toast(`新しい日 ${added}・詳しい記録に入れ替え ${replaced}・そのまま ${same}。初めての駅 ${newVisits.length - newSpots}・SA・銭湯など ${newSpots} を図鑑に追加`);
 }
 
 // SA・PA・道の駅：立ち寄った所に、最初の1回だけスタンプ。書き込む visits を out に足し、件数を返す
@@ -256,7 +259,7 @@ async function backfillSpots() {
   const n = await stampSpots(allDays, out);
   await db.putMany(out);
   await db.setMeta("spotScan", 2);
-  if (n) { toast(`これまでの記録から、SA・PA・道の駅・銭湯・温泉 ${n} か所にスタンプを押しました`); render(); }
+  if (n) { toast(`これまでの記録から、SA・PA・道の駅・銭湯・温泉 ${n} か所を図鑑に追加しました`); render(); }
 }
 
 function timelinePicker(label, primary = false) {
@@ -291,7 +294,7 @@ async function importJson(file) {
   let data;
   try { data = JSON.parse(await file.text()); } catch { toast("JSONとして読めませんでした"); return; }
   if (data?.app !== "eki-stamp" || !Array.isArray(data.stations) || !Array.isArray(data.visits)) {
-    toast("駅スタンプ帳のバックアップではありません"); return;
+    toast("あしあと帳のバックアップではありません"); return;
   }
   const okS = data.stations.filter((s) => s && typeof s.id === "string" && typeof s.name === "string");
   const okV = data.visits.filter((v) => v && typeof v.id === "string" && typeof v.stationId === "string" && !isNaN(Date.parse(v.at)));
@@ -300,7 +303,7 @@ async function importJson(file) {
   // 足し合わせる（今ある記録は消さない）。同じIDは同じ記録なので上書きしても中身は同じ
   await db.putMany([...okS.map((s) => ["stations", s]), ...okV.map((v) => ["visits", v])]);
   await load();
-  toast(`読み込みました（新しい駅 ${newS}・スタンプ ${newV}）`);
+  toast(`読み込みました（新しい場所 ${newS}・記録 ${newV}）`);
 }
 
 /* ---------- 画面 ---------- */
@@ -308,13 +311,13 @@ function render() {
   document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
   const went = stations.filter((s) => visitsOf(s.id).length);
   const spots = went.filter(isSpot).length;
-  $("#summary").textContent = `${went.length - spots}駅${spots ? `・施設 ${spots}` : ""}・スタンプ ${visits.length}個`;
+  $("#summary").textContent = `${went.length - spots}駅${spots ? `・${spots}か所` : ""}`;
   const main = $("#main");
   main.replaceChildren();
-  if (tab === "stamps") renderStamps(main);
+  if (tab === "home") renderHome(main);
+  else if (tab === "zukan") renderZukan(main);
   else if (tab === "lines") renderLines(main);
   else if (tab === "map") renderMap(main);
-  else if (tab === "log") renderLog(main);
   else if (tab === "review" || tab === "life") renderSummary(main);
   else renderBackup(main);
 }
@@ -347,7 +350,7 @@ function renderNear() {
   const box = h("section", { class: "near" });
   box.append(h("button", { type: "button", class: "primary big", onclick: findNear,
     disabled: near.state === "locating",
-    text: near.state === "locating" ? "現在地を確かめています…" : near.state === "done" ? "もう一度探す" : "近くの駅・SA・銭湯を探す（GPS）" }));
+    text: near.state === "locating" ? "現在地を確かめています…" : near.state === "done" ? "もう一度探す" : "今いる駅・SA・銭湯を記録する（GPS）" }));
   if (near.state === "error") box.append(h("p", { class: "warn", text: near.msg }));
   if (near.state === "done") {
     const { pos, spot } = near;
@@ -362,7 +365,7 @@ function renderNear() {
       return h("li", { class: ok ? "in" : "" },
         h("div", {}, h("b", { text: m.name }), h("small", { text: `${meters(m.dist)}・${sub}` })),
         ok
-          ? h("button", { type: "button", class: "primary", disabled: done, text: done ? "今日は押した" : "スタンプ",
+          ? h("button", { type: "button", class: "primary", disabled: done, text: done ? "今日は記録済み" : "記録する",
               onclick: async (e) => { e.currentTarget.disabled = true; await stampHere(m); } })
           : h("span", { class: "muted", text: `あと${meters(m.dist - geo.STAMP_RADIUS)}` }));
     })));
@@ -448,34 +451,101 @@ function renderLines(main) {
   }
   const lines = myLines();
   if (!lines.length) {
-    main.append(h("p", { class: "empty", text: "駅でスタンプを押すと、その駅を通る路線がここに並びます。全駅で降りたら「制覇」です。" }));
+    main.append(h("p", { class: "empty", text: "行った駅を通る路線がここに並びます。全駅で降りたら「制覇」です。" }));
     return;
   }
   const got = visitedGids();
   const full = lines.filter((l) => l.left === 0).length;
   const rodeAll = lines.filter((l) => l.done + l.via === l.total).length;
-  main.append(h("p", { class: "linesum" }, h("b", { text: `${lines.length}路線` }), ` に足あと・降りて制覇 ${full}・乗りつぶし ${rodeAll}`));
+  main.append(h("p", { class: "linesum" }, h("b", { text: `${lines.length}路線` }), ` にあしあと・降りて制覇 ${full}・乗りつぶし ${rodeAll}`));
   main.append(h("p", { class: "legend" },
-    h("span", { class: "on", text: "降りた" }), h("span", { class: "via", text: "通った" }), h("span", { text: "まだ" })));
+    h("span", { class: "on" }, h("i"), "降りた"), h("span", { class: "via" }, h("i"), "通った"), h("span", {}, h("i"), "まだ")));
   for (const l of lines) {
+    const st = lineStyle(l.name);
     const pct = (n) => Math.round((n / l.total) * 1000) / 10;
-    const d = h("details", { class: "line" + (l.left === 0 ? " full" : "") },
+    const d = h("details", { class: "line" + (l.left === 0 ? " full" : ""), style: `--lc:${st.color}` },
       h("summary", {},
+        h("span", { class: "lbadge", text: st.sym }),
         h("span", { class: "ln", text: l.name }),
         h("span", { class: "cnt", text: l.left === 0 ? "制覇！" : `${l.done}/${l.total}` }),
         h("span", { class: "bar" }, h("i", { style: `width:${pct(l.done)}%` }), h("i", { class: "via", style: `width:${pct(l.via)}%` })),
         l.via ? h("small", { class: "sub", text: `通った駅を入れると ${l.done + l.via}/${l.total}${l.done + l.via === l.total ? "（乗りつぶし）" : ""}` }) : null),
-      h("ol", { class: "dots" }, l.ids.map((id) => h("li", { class: got.has(id) ? "on" : l.rode.has(id) ? "via" : "" }, master.byId[id].name))));
+      h("ol", { class: "route" }, l.ids.map((id) => h("li", { class: got.has(id) ? "on" : l.rode.has(id) ? "via" : "" },
+        h("i"), h("span", { text: master.byId[id].name })))));
     main.append(d);
   }
-  main.append(h("p", { class: "hint", text: "路線をタップすると、端から順に駅が並びます。「通った」はタイムラインの電車の乗り降りから計算した区間です（乗り換えを含む移動は使っていません）。支線のある路線は順番が少し前後します。" }));
+  main.append(h("p", { class: "hint", text: "路線をタップすると、端から順に駅が路線図のように並びます。「通った」はタイムラインの電車の乗り降りから計算した区間です（乗り換えを含む移動は使っていません）。支線のある路線は順番が少し前後します。記号と色は各社の路線カラーに近いものです（首都圏の主な路線だけ）。" }));
 }
 
-function renderStamps(main) {
-  main.append(backupNudge() || "", renderNear());
+/* ---------- 最近のあしあと（最初の画面） ---------- */
+function renderHome(main) {
+  main.append(backupNudge() || "");
+  if (dayKeys.length && (!allDays || (!roads && !summaryTried))) {
+    main.append(h("p", { class: "empty", text: "記録を集計しています…" }));
+    ensureAll().then(() => { if (tab === "home") render(); });
+    return;
+  }
+  const days = allDays || [];
+  // 初めて行った日（駅・施設ごと）
+  const firstAt = new Map();
+  for (const v of visits) if (!firstAt.has(v.stationId) || v.at < firstAt.get(v.stationId)) firstAt.set(v.stationId, v.at);
+  const newOn = (date) => stations.filter((s) => firstAt.get(s.id) && localDay(firstAt.get(s.id)) === date);
+  const dayKm = (d) => {
+    const k = tl.kmByMode(d.acts); delete k.fly;
+    if (roads && k.car) { const c = rd.splitCar(roads, d); delete k.car; k.hw = c.hw; k.general = c.general; }
+    return k;
+  };
+  const chipsOf = (k) => Object.entries(k).filter(([, v]) => v >= 0.1).map(([m, v]) =>
+    h("span", { class: "chip", style: `--c:${m === "hw" ? ROADCOLORS.hw : m === "general" ? ROADCOLORS.general : tl.MODES[m]?.color}`,
+      text: `${m === "hw" ? "高速" : m === "general" ? "一般道" : tl.MODES[m]?.label} ${Math.round(v * 10) / 10}km` }));
+
+  if (days.length) {
+    // 今月
+    const month = days.at(-1).date.slice(0, 7);
+    const md0 = days.filter((d) => d.date.startsWith(month));
+    const mk = {};
+    for (const d of md0) for (const [m, v] of Object.entries(dayKm(d))) mk[m] = (mk[m] || 0) + v;
+    const newM = stations.filter((s) => firstAt.get(s.id) && localDay(firstAt.get(s.id)).startsWith(month));
+    main.append(h("section", { class: "card review" },
+      h("p", { class: "muted", text: `${+month.slice(5)}月のあしあと` }),
+      h("p", { class: "big" }, h("b", { text: Math.round(Object.values(mk).reduce((a, b) => a + b, 0)).toLocaleString() }), " km"),
+      h("div", { class: "modes" }, chipsOf(mk)),
+      newM.length ? h("p", { class: "muted", text: `初めて：${newM.map((s) => s.name).join("・")}` }) : null));
+    // 最近の日
+    const recent = days.slice(-7).reverse();
+    main.append(h("h2", { class: "gridhead", text: "最近の日" }),
+      h("ol", { class: "recent" }, recent.map((d) => {
+        const nw = newOn(d.date);
+        return h("li", {}, h("button", { type: "button", onclick: () => { mapDate = d.date; tab = "map"; render(); window.scrollTo(0, 0); } },
+          h("b", { text: ymd(d.date + "T12:00") }),
+          h("div", { class: "modes" }, chipsOf(dayKm(d))),
+          nw.length ? h("small", { text: `初めて：${nw.map((s) => s.name).join("・")}` }) : null));
+      })),
+      h("p", { class: "muted", text: `移動の記録は ${ymd(days.at(-1).date + "T12:00")} まで。タイムラインを読み込むと続きが入ります。` }),
+      h("div", { class: "btns" }, ...timelinePicker("タイムラインを読み込む")));
+  } else {
+    main.append(h("section", { class: "card" },
+      h("h2", { text: "移動の記録を読み込む" }),
+      h("p", { text: "Googleマップのタイムラインを読み込むと、最近の移動・初めて行った場所・路線のあしあとが自動でたまります。" }),
+      h("div", { class: "btns" }, ...timelinePicker("タイムラインを読み込む", true))));
+  }
+  main.append(renderNext() || "");
+  main.append(h("details", { class: "add gps" }, h("summary", { text: "今いる場所をその場で記録する（GPS）" }), renderNear()));
+}
+
+// 全日分の記録・道路・駅データを読む（集計する画面の前に1回）
+function ensureAll() {
+  summaryTried = true;
+  return Promise.all([allDays ? null : db.getAll("days").then((d) => (allDays = d)),
+    roads ? null : rd.loadRoads().then((r) => (roads = r)).catch(() => null),
+    master ? null : geo.loadMaster().then((m) => (master = m)).catch(() => null)]);
+}
+
+/* ---------- あしあと図鑑 ---------- */
+function renderZukan(main) {
   const mine = stations.filter((s) => visitsOf(s.id).length);
   if (!mine.length) {
-    main.append(h("p", { class: "empty", text: "まだスタンプがありません。駅に着いたら「近くの駅を探す」を押してください。" }));
+    main.append(h("p", { class: "empty", text: "まだありません。タイムラインを読み込むか、駅で「今いる場所を記録する」を押すと、初めて行った駅や施設がここに並びます。" }));
   } else {
     // 最近押した順
     const last = (s) => visitsOf(s.id).at(-1).at;
@@ -485,10 +555,9 @@ function renderStamps(main) {
     for (const [label, items] of groups) {
       if (items.length) main.append(h("h2", { class: "gridhead", text: `${label} ${items.length}` }), h("div", { class: "grid" }, items.map(stampButton)));
     }
-    main.append(h("p", { class: "hint", text: "スタンプをタップすると、記録を見たり、もう一度押したりできます。" }));
+    main.append(h("p", { class: "hint", text: "判子の日付は初めて行った日。タップすると、行った日の一覧が見られます。" }));
   }
-  main.append(renderNext() || "");
-  // 押し忘れた駅を記録：打つと全国の駅から候補が出る
+  // 手で足す：打つと全国の駅から候補が出る
   const sugg = h("ul", { class: "sugg" });
   const name = h("input", { name: "name", placeholder: "駅名（例：吉祥寺）", required: true, autocomplete: "off", enterkeyhint: "done",
     oninput: async () => {
@@ -500,9 +569,13 @@ function renderStamps(main) {
           h("b", { text: m.name }), h("small", { text: m.lines })))));
     } });
   main.append(h("details", { class: "add" },
-    h("summary", { text: "GPSで押し忘れた駅を記録する" }),
+    h("summary", { text: "記録に残っていない駅を手で足す" }),
     h("div", { class: "row" }, name), sugg,
-    h("p", { class: "muted", text: "候補をタップすると、今日の日付でスタンプが押されます（記録には「タップ」と残ります）。" })));
+    h("p", { class: "muted", text: "候補をタップすると、今日の日付で記録されます（記録には「タップ」と残ります）。" })));
+  // 行った順
+  const log = h("details", { class: "add" }, h("summary", { text: "行った順に見る" }));
+  main.append(log);
+  log.addEventListener("toggle", () => { if (log.open && log.children.length === 1) renderLog(log); });
 }
 
 /* ---------- 地図（1日の道のり） ---------- */
@@ -510,7 +583,7 @@ function renderMap(main) {
   if (!dayKeys.length) {
     main.append(h("section", { class: "card" },
       h("h2", { text: "移動の記録を読み込む" }),
-      h("p", { text: "Googleマップのタイムライン（スマホが裏で記録している、行った場所と道のり）を読み込むと、日ごとの道のりが地図に出て、電車で乗り降りした駅に自動でスタンプが押されます。" }),
+      h("p", { text: "Googleマップのタイムライン（スマホが裏で記録している、行った場所と道のり）を読み込むと、日ごとの道のりが地図に出て、電車で乗り降りした駅や立ち寄った施設が図鑑に入ります。" }),
       h("ol", { class: "steps" },
         h("li", { text: "スマホの「設定」→「位置情報」→「位置情報サービス」→「タイムライン」" }),
         h("li", { text: "「タイムライン データをエクスポート」で保存" }),
@@ -553,7 +626,7 @@ function renderMap(main) {
     drawDay(box, day, stamped, car);
     below.replaceChildren(
       car?.names.length ? h("p", { class: "muted", text: `走った高速：${car.names.slice(0, 6).join("・")}` }) : "",
-      stamped.length ? h("p", { class: "muted", text: `この日のスタンプ：${[...new Set(stamped.map((s) => s.name))].join("・")}` }) : "",
+      stamped.length ? h("p", { class: "muted", text: `この日に記録した場所：${[...new Set(stamped.map((s) => s.name))].join("・")}` }) : "",
       h("div", { class: "btns" }, ...timelinePicker("新しいタイムラインを読み込む")),
       h("p", { class: "muted", text: "記録はGoogleマップのタイムラインから。読み込みは足し算で、同じ日は記録が詳しいほうが残ります（古いスマホの書き出しも読めます）。" }));
   });
@@ -604,11 +677,7 @@ async function renderDistance(box) {
 function renderSummary(main) {
   if (dayKeys.length && (!allDays || (!roads && !summaryTried))) {
     main.append(h("p", { class: "empty", text: "記録を集計しています…" }));
-    summaryTried = true;
-    Promise.all([allDays ? null : db.getAll("days").then((d) => (allDays = d)),
-      roads ? null : rd.loadRoads().then((r) => (roads = r)).catch(() => null),
-      master ? null : geo.loadMaster().then((m) => (master = m)).catch(() => null)])
-      .then(() => { if (tab === "review" || tab === "life") render(); });
+    ensureAll().then(() => { if (tab === "review" || tab === "life") render(); });
     return;
   }
   const days = allDays || [];
@@ -616,6 +685,7 @@ function renderSummary(main) {
     renderReview(main, { allDays: days, stations, visits, roads, master, year: reviewYear,
       setYear: (y) => { reviewYear = y; render(); },
       openDay: (d) => { mapDate = d; tab = "map"; render(); window.scrollTo(0, 0); } });
+    if (days.length) { const box = h("section", { class: "card dist-card" }); main.append(box); renderDistance(box); }
   } else {
     const span = days.length ? new Set(days.map((d) => d.date.slice(0, 7))).size : 1;
     renderLife(main, { allDays: days, master, life, monthsSpan: span,
@@ -625,8 +695,7 @@ function renderSummary(main) {
 let summaryTried = false;
 
 function renderLog(main) {
-  if (dayKeys.length) { const box = h("section", { class: "card dist-card" }); main.append(box); renderDistance(box); }
-  if (!visits.length) { main.append(h("p", { class: "empty", text: "まだスタンプがありません。" })); return; }
+  if (!visits.length) { main.append(h("p", { class: "empty", text: "まだ記録がありません。" })); return; }
   const byId = Object.fromEntries(stations.map((s) => [s.id, s]));
   const sorted = [...visits].sort((a, b) => b.at.localeCompare(a.at));
   let month = "";
@@ -651,7 +720,7 @@ function renderBackup(main) {
   main.append(
     h("section", { class: "card" },
       h("h2", { text: "バックアップ" }),
-      h("p", { text: "記録はこのスマホの中にだけあります。機種変更やブラウザのデータ削除に備えて、ときどき書き出してください。" }),
+      h("p", { text: "あしあとはこのスマホの中にだけあります。機種変更やブラウザのデータ削除に備えて、ときどき書き出してください。" }),
       h("div", { class: "btns" },
         h("button", { type: "button", class: "primary", onclick: exportJson, text: "書き出す（JSON）" }),
         h("button", { type: "button", onclick: () => file.click(), text: "読み込む" }), file),
@@ -671,7 +740,7 @@ function renderBackup(main) {
       h("p", { class: "muted", text: "駅の位置：国土数値情報（鉄道データ N02-24）（国土交通省）を加工して作成。高速道路：国土数値情報（高速道路時系列データ N06-24）（国土交通省）を加工して作成。SA・PA・道の駅・銭湯・温泉：© OpenStreetMap contributors（ODbL）。地図：地理院タイル" })),
     h("section", { class: "card" },
       h("h2", { text: "ホーム画面に追加" }),
-      h("p", { text: "iPhone：Safariの共有ボタン →「ホーム画面に追加」。Android：Chromeのメニュー →「ホーム画面に追加」。" }),
+      h("p", { text: "iPhone：Safariの共有ボタン →「ホーム画面に追加」。Android：Chromeのメニュー →「ホーム画面に追加」→「インストール」。" }),
       h("p", { class: "muted", text: "iPhoneでは、Safariで開いたときとホーム画面から開いたときで記録が別々になります。ふだんはホーム画面のアイコンから使ってください。" })),
   );
 }
@@ -681,7 +750,7 @@ function openSheet(s) {
   const dlg = $("#sheet");
   const draw = () => {
     const vs = visitsOf(s.id);
-    const delBtn = h("button", { type: "button", class: "danger", text: "この駅を削除",
+    const delBtn = h("button", { type: "button", class: "danger", text: "図鑑から消す",
       onclick: async () => {
         if (delBtn.dataset.armed) { dlg.close(); await removeStation(s); return; }
         delBtn.dataset.armed = "1"; delBtn.textContent = "もう一度押すと削除（記録も消えます）";
@@ -691,7 +760,7 @@ function openSheet(s) {
         h("h2", { text: s.name }),
         h("button", { type: "button", class: "close", "aria-label": "閉じる", text: "×", onclick: () => dlg.close() })),
       h("p", { class: "muted", text: [s.area, s.lines, s.firstDate ? `${md(s.firstDate)}に追加` : ""].filter(Boolean).join("・") }),
-      h("button", { type: "button", class: "primary big", text: "今日ここに来た（スタンプ）",
+      h("button", { type: "button", class: "primary big", text: "今日ここに来た",
         onclick: async () => { await addVisit(s); draw(); } }),
       vs.length
         ? h("ol", { class: "visits" }, vs.map((v) => {
@@ -703,7 +772,7 @@ function openSheet(s) {
             const acc = v.how === "gps" && v.acc != null ? ` ±${meters(v.acc)}` : "";
             return h("li", {}, h("span", { text: `${ymd(v.at)}（${HOW[v.how] || ""}${acc}）` }), undo);
           }))
-        : h("p", { class: "muted", text: "まだスタンプはありません。" }),
+        : h("p", { class: "muted", text: "まだ記録はありません。" }),
       h("p", { class: "links" },
         s.lat != null ? h("a", { href: `https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`, target: "_blank", rel: "noopener", text: "地図で見る" }) : null,
         s.url ? h("a", { href: s.url, target: "_blank", rel: "noopener", text: "駅のページ" }) : null),
