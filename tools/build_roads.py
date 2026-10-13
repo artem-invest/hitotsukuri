@@ -5,11 +5,13 @@
     [out:json];area["ISO3166-1"="JP"][admin_level=2]->.jp;
     (nwr["highway"~"^(services|rest_area)$"](area.jp););out center tags;
   高速道路の線：国土数値情報（高速道路時系列データ N06）国土交通省
+  銭湯・温泉：© OpenStreetMap contributors（ODbL）。
+    [out:json];area["ISO3166-1"="JP"][admin_level=2]->.jp;(nwr["amenity"="public_bath"](area.jp););out center tags;
 使い方:
-  python -X utf8 tools/build_roads.py <osm_sapa.json> <N06-24_GML.zip>
+  python -X utf8 tools/build_roads.py <osm_sapa.json> <N06-24_GML.zip> <osm_bath.json>
 
 出力:
-  spots:    [[ID, 名前, 種類(sa|pa|michi), 緯度, 経度], ...]
+  spots:    [[ID, 名前, 種類(sa|pa|michi|sento|super|onsen), 緯度, 経度], ...]
   highways: [[路線名, [緯度, 経度, 緯度, 経度, ...]], ...]  （約15mの精度に間引いた線）
 """
 import json
@@ -32,6 +34,22 @@ def kind_of(name):
     if re.search(r"PA\b|PA[ （(]|パーキングエリア", name + " "):
         return "pa"
     return None
+
+
+SUPER = re.compile(r"スパ|SPA|Spa|健康ランド|スーパー銭湯|極楽湯|おふろの王様|竜泉寺|湯快爽快|万葉倶楽部|ラクスパ|テルマー湯|スパジアム|湯けむりの庄")
+NOT_BATH = {"foot_bath", "hand_bath", "finger_bath"}
+
+
+def bath_kind(tags):
+    """銭湯（町の銭湯）／super（スーパー銭湯・スパ）／onsen（日帰り温泉）。足湯・手湯・宿泊客専用は除く"""
+    name, bt = tags.get("name", ""), tags.get("bath:type", "")
+    if not name or bt in NOT_BATH or tags.get("access") in ("private", "customers", "no") or "足湯" in name:
+        return None
+    if bt == "super_sento" or SUPER.search(name):
+        return "super"
+    if bt in ("onsen", "hot_spring", "thermal") or "温泉" in name:
+        return "onsen"
+    return "sento"
 
 
 def tidy(name, kind):
@@ -78,7 +96,7 @@ def simplify(pts, tol=15.0):
     return [p for p, k in zip(pts, keep) if k]
 
 
-def main(osm_path, n06_zip):
+def main(osm_path, n06_zip, bath_path=None):
     osm = json.load(open(osm_path, encoding="utf-8"))["elements"]
     spots = []
     for e in osm:
@@ -96,6 +114,20 @@ def main(osm_path, n06_zip):
             continue
         spots.append([f"{kind}-{e['type'][0]}{e['id']}", nm, kind, round(lat, 5), round(lng, 5)])
 
+    if bath_path:
+        for e in json.load(open(bath_path, encoding="utf-8"))["elements"]:
+            kind = bath_kind(e.get("tags", {}))
+            if not kind:
+                continue
+            lat = e.get("lat", e.get("center", {}).get("lat"))
+            lng = e.get("lon", e.get("center", {}).get("lon"))
+            if lat is None:
+                continue
+            nm = re.sub(r"\s*;\s*", " ", e["tags"]["name"].replace("　", " ")).strip()  # 「武蔵小山温泉;清水湯」→ 空白区切り
+            if any(s[1] == nm and meters((s[3], s[4]), (lat, lng)) < 300 for s in spots):
+                continue
+            spots.append([f"{kind}-{e['type'][0]}{e['id']}", nm, kind, round(lat, 5), round(lng, 5)])
+
     z = zipfile.ZipFile(n06_zip)
     name = next(n for n in z.namelist() if n.startswith("UTF-8/") and n.endswith("HighwaySection.geojson"))
     highways = []
@@ -112,15 +144,15 @@ def main(osm_path, n06_zip):
         highways.append([pr["N06_007"], flat])
 
     data = {
-        "source": "SA・PA・道の駅：© OpenStreetMap contributors（ODbL）／高速道路：国土数値情報（高速道路時系列データ）（国土交通省）を加工して作成",
+        "source": "SA・PA・道の駅・銭湯・温泉：© OpenStreetMap contributors（ODbL）／高速道路：国土数値情報（高速道路時系列データ）（国土交通省）を加工して作成",
         "spots": sorted(spots, key=lambda s: s[0]),
         "highways": highways,
     }
     OUT.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    kinds = {k: sum(1 for s in spots if s[2] == k) for k in ("sa", "pa", "michi")}
+    kinds = {k: sum(1 for s in spots if s[2] == k) for k in ("sa", "pa", "michi", "sento", "super", "onsen")}
     kept = sum(len(h[1]) // 2 for h in highways)
     print(f"SA・PA・道の駅 {kinds}  高速 {len(highways)}区間 {total}→{kept}点  {OUT.stat().st_size / 1024:.0f}KB")
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2])
+    main(*sys.argv[1:4])

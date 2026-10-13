@@ -6,11 +6,17 @@ export const SPOT_RADIUS = 250;  // 滞在した場所からこの距離[m]以�
 const HW_NEAR = 60;              // 高速道路の線からこの距離[m]以内なら「高速の上」
 const HW_AROUND = 500;           // 点がまばらなときは、この距離[m]以内に高速があり、速ければ高速とみなす
 const FAST_KMH = 55;             // 一般道で平均この速さを超えることはまず無い
+// group：スタンプ帳での並べ方。radius/minStay：タイムラインで「立ち寄った」とみなす距離[m]と滞在[分]
+// 銭湯は町の中に密集しているので、近く・長めの滞在に絞る（隣の銭湯と取り違えないように）
 export const KINDS = {
-  sa: { label: "SA", color: "#3f6fc4" },
-  pa: { label: "PA", color: "#3a9a62" },
-  michi: { label: "道の駅", color: "#c7772a" },
+  sa: { label: "SA", color: "#3f6fc4", group: "road", radius: SPOT_RADIUS, minStay: 0 },
+  pa: { label: "PA", color: "#3a9a62", group: "road", radius: SPOT_RADIUS, minStay: 0 },
+  michi: { label: "道の駅", color: "#c7772a", group: "road", radius: SPOT_RADIUS, minStay: 0 },
+  sento: { label: "銭湯", color: "#2b6f8f", group: "bath", radius: 80, minStay: 20 },
+  super: { label: "スーパー銭湯", color: "#7a3f8f", group: "bath", radius: 100, minStay: 20 },
+  onsen: { label: "温泉", color: "#c8432b", group: "bath", radius: 150, minStay: 20 },
 };
+export const GROUPS = { road: "SA・PA・道の駅", bath: "銭湯・温泉" };
 
 let roads = null;
 let loading = null;
@@ -67,12 +73,13 @@ export function nearHighway(r, la, lo, radius = HW_AROUND) {
   return best;
 }
 
-export function nearestSpot(r, la, lo, radius = SPOT_RADIUS) {
+// いちばん近い施設。radius を省くと種類ごとの距離（KINDS.radius）で判定。ok で種類を絞れる
+export function nearestSpot(r, la, lo, radius = null, ok = () => true) {
   let best = null;
   for (const s of r.spots) {
-    if (Math.abs(s.lat - la) > 0.01 || Math.abs(s.lng - lo) > 0.013) continue;
+    if (Math.abs(s.lat - la) > 0.015 || Math.abs(s.lng - lo) > 0.02 || !ok(s)) continue;
     const d = distance(la, lo, s.lat, s.lng);
-    if (d <= radius && (!best || d < best.dist)) best = { ...s, dist: d };
+    if (d <= (radius ?? KINDS[s.kind].radius) && (!best || d < best.dist)) best = { ...s, dist: d };
   }
   return best;
 }
@@ -119,15 +126,20 @@ export function splitCar(r, day) {
 
 // 立ち寄った SA・PA・道の駅 [{spot, t}]
 // 手がかりは「滞在」と「車の移動の出発・到着地点」。短い休憩は滞在として残らないことが多いため（実データで確認）
+// 銭湯・温泉は「滞在」だけを見て、種類ごとの距離と滞在時間（KINDS.minStay）を満たすものに限る
 export function spotStops(r, days) {
   const out = [];
-  const hit = (la, lo, t) => {
-    const s = nearestSpot(r, la, lo);
+  const road = (s) => KINDS[s.kind].group === "road";
+  const hit = (la, lo, t, ok) => {
+    const s = nearestSpot(r, la, lo, null, ok);
     if (s && !s.name.includes("大型")) out.push({ spot: s, t });
   };
   for (const d of days) {
-    for (const st of d.stays) hit(st.at[0], st.at[1], st.s);
-    for (const a of d.acts) if (a.mode === "car") { hit(a.a[0], a.a[1], a.s); hit(a.b[0], a.b[1], a.e); }
+    for (const st of d.stays) {
+      const mins = (st.e - st.s) / 60;
+      hit(st.at[0], st.at[1], st.s, (s) => mins >= KINDS[s.kind].minStay);
+    }
+    for (const a of d.acts) if (a.mode === "car") { hit(a.a[0], a.a[1], a.s, road); hit(a.b[0], a.b[1], a.e, road); }
   }
   return out;
 }
