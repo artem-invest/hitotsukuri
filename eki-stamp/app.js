@@ -1,5 +1,6 @@
 // あしあと帳（もとは駅スタンプ帳）：画面と操作
 // データの流れ： IndexedDB（db.js）→ stations / visits の配列 → render() で画面を作り直す
+import { boot } from "./boot.js";
 import * as db from "./db.js";
 import * as geo from "./geo.js";
 import * as tl from "./timeline.js";
@@ -10,7 +11,8 @@ import { renderReview } from "./review.js";
 import { renderLife } from "./life.js";
 import { lineStyle } from "./linestyle.js";
 
-const APP_VERSION = "2.2.1";
+const APP_VERSION = "2.2.2";
+boot("app.js開始");
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
 // 朝刊の駅スタンプ帳から引き継いだ記録（2026-10-13時点）。初回起動のときだけ入れる
@@ -61,12 +63,15 @@ const visitsOf = (id) => visits.filter((v) => v.stationId === id).sort((a, b) =>
 
 async function load() {
   let all;
+  boot("記録を読む");
   [stations, all] = await Promise.all([db.getAll("stations"), db.getAll("visits")]);
+  boot("記録を読んだ");
   visits = all.filter((v) => !v.pending);
   pending = all.filter((v) => v.pending).sort((a, b) => b.at.localeCompare(a.at));
   meta.lastExport = await db.getMeta("lastExport");
   life = (await db.getMeta("life")) || { places: [], candidates: [] };
   dayKeys = (await db.getAllKeys("days")).sort();
+  boot("画面を作る");
   allDays = null;
   rides = null;
   render();
@@ -904,6 +909,7 @@ async function openDay(date, s, back = null) {
 }
 
 /* ---------- 起動 ---------- */
+boot("タブの準備");
 document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
   tab = b.dataset.tab;
   try { localStorage.setItem("eki.tab", tab); } catch {}
@@ -928,10 +934,13 @@ if ("serviceWorker" in navigator) {
 
 (async () => {
   try {
+    boot("初回の準備");
     await seedIfFirst();
     await load();
+    boot("最初の画面が出た");
   } catch (e) {
-    $("#main").replaceChildren(h("p", { class: "empty", text: "記録を読み込めませんでした。プライベートブラウズでは使えないことがあります。" }));
+    boot("起動で失敗：" + (e?.message || e));
+    $("#main").replaceChildren(h("p", { class: "empty", text: `記録を読み込めませんでした（${e?.message || e}）。` }));
     return;
   }
   meta.persisted = await askPersist().catch(() => "unsupported");

@@ -62,6 +62,7 @@ window.fetch = (u, o) => realFetch(typeof u === "string" && /^\.\/[^/]+\.json$/.
 
 document.getElementById("go").onclick = async (e) => {
   e.target.disabled = true;
+  try { localStorage.removeItem("eki.bootlog"); } catch (x) {}
   await step("ブラウザ", async () => navigator.userAgent.replace(/^Mozilla\/5\.0 /, ""));
   await step("覚えているタブ", async () => { try { return localStorage.getItem("eki.tab") || "（なし）"; } catch (x) { return "読めない"; } });
   await step("サービスワーカー", async () => (navigator.serviceWorker ? (await navigator.serviceWorker.getRegistrations()).map((r) => (r.active ? r.active.scriptURL.split("/").pop() : "準備中")).join("・") || "なし" : "非対応"));
@@ -101,6 +102,7 @@ document.getElementById("go").onclick = async (e) => {
     }
     throw new Error("20秒たっても「読み込んでいます」のまま");
   });
+  await step("アプリがどこまで進んだか", async () => { try { return JSON.parse(localStorage.getItem("eki.bootlog") || "[]").join(" → ") || "目印なし（app.js が動き始めていない）"; } catch (x) { return "読めない"; } });
   const li = document.createElement("li");
   li.textContent = `終わり（全部で${Math.round((performance.now() - t0) / 1000)}秒）`;
   ol.appendChild(li);

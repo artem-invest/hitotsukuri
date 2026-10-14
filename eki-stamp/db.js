@@ -2,6 +2,8 @@
 // ブラウザの中にある小さなデータベース。localStorage より容量が大きく、
 // 「駅」と「訪問」を別々の表として持てるので、あとから地図やGPSを足しやすい。
 
+import { boot } from "./boot.js";
+
 const DB_NAME = "eki-stamp";
 const DB_VERSION = 2; // 2: タイムラインの日ごとの記録（days）を追加
 let dbPromise = null;
@@ -9,7 +11,11 @@ let dbPromise = null;
 export function openDB() {
   if (dbPromise) return dbPromise;
   dbPromise = new Promise((resolve, reject) => {
+    boot("記録を開く");
     const req = indexedDB.open(DB_NAME, DB_VERSION);
+    // ほかの画面が古い版でつないだままだと、開くのが待たされる。黙って止まらずに知らせる
+    req.onblocked = () => { boot("記録を開くのを待たされている"); };
+    setTimeout(() => reject(new Error("記録を開けない（10秒）")), 10000);
     // 初回（またはバージョンを上げたとき）だけ表を作る
     req.onupgradeneeded = () => {
       const db = req.result;
@@ -34,6 +40,7 @@ export function openDB() {
     req.onsuccess = () => {
       // 新しい版が表を足そうとしたら、古い画面はつなぎを手放す（でないと更新が止まる）
       req.result.onversionchange = () => req.result.close();
+      boot("記録を開いた");
       resolve(req.result);
     };
     req.onerror = () => reject(req.error);
