@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>あしあと帳の診断</title>
+<style>
+/* アプリの外に置いた診断ページ。アプリの部品と記録を1段ずつ試し、どこで止まるかを書き出す。記録は書き換えない */
+body{margin:0;background:#f5f0e6;color:#2a2622;font:14px/1.6 system-ui,sans-serif;padding:16px}
+h1{font-size:1.2rem;margin:0 0 6px}
+button{font:inherit;font-weight:700;background:#c8432b;color:#fff;border:0;border-radius:10px;padding:10px 16px;width:100%;margin:6px 0}
+ol{padding-left:1.4em;margin:8px 0}
+li{margin:3px 0;word-break:break-all}
+.ng{color:#c8432b;font-weight:700}
+.ok{color:#2e7d4f}
+.muted{color:#7b7266;font-size:.8rem}
+</style>
+</head>
+<body>
+<h1>あしあと帳の診断</h1>
+<p class="muted">記録は書き換えません。終わったら（または途中で止まったら）この画面のスクリーンショットを送ってください。</p>
+<button id="go" type="button">診断する</button>
+<ol id="log"></ol>
+<script>
+const ol = document.getElementById("log");
+const t0 = performance.now();
+const pause = () => new Promise((r) => setTimeout(r, 30)); // 1行ずつ画面に出す
+async function step(name, fn) {
+  const li = document.createElement("li");
+  li.textContent = `${name} …`;
+  ol.appendChild(li);
+  await pause();
+  const s = performance.now();
+  try {
+    const r = await Promise.race([fn(), new Promise((_, ng) => setTimeout(() => ng(new Error("20秒たっても終わらない")), 20000))]);
+    li.innerHTML = "";
+    li.append(`${name}：`, Object.assign(document.createElement("span"), { className: "ok", textContent: `${r ?? "OK"}` }), `（${Math.round(performance.now() - s)}ms）`);
+    await pause();
+    return true;
+  } catch (e) {
+    li.innerHTML = "";
+    li.append(`${name}：`, Object.assign(document.createElement("span"), { className: "ng", textContent: `失敗 ${e && (e.message || e.name || e)}` }));
+    await pause();
+    return false;
+  }
+}
+const idb = (fn) => new Promise((ok, ng) => {
+  const req = indexedDB.open("eki-stamp");
+  req.onerror = () => ng(req.error);
+  req.onblocked = () => ng(new Error("ほかの画面が使用中"));
+  req.onsuccess = () => { const db = req.result; Promise.resolve(fn(db)).then((r) => { db.close(); ok(r); }, (e) => { db.close(); ng(e); }); };
+});
+const all = (db, store, keys = false) => new Promise((ok, ng) => {
+  if (!db.objectStoreNames.contains(store)) return ok([]);
+  const r = keys ? db.transaction(store).objectStore(store).getAllKeys() : db.transaction(store).objectStore(store).getAll();
+  r.onsuccess = () => ok(r.result); r.onerror = () => ng(r.error);
+});
+const v = `?diag=${Date.now()}`;
+// アプリの部品は "./stations.json" のようにアプリのフォルダからデータを読むので、このページから使うときは置き場所を直す
+const realFetch = window.fetch.bind(window);
+window.fetch = (u, o) => realFetch(typeof u === "string" && /^\.\/[^/]+\.json$/.test(u) ? "eki-stamp/" + u.slice(2) : u, o);
+
+document.getElementById("go").onclick = async (e) => {
+  e.target.disabled = true;
+  await step("ブラウザ", async () => navigator.userAgent.replace(/^Mozilla\/5\.0 /, ""));
+  await step("覚えているタブ", async () => { try { return localStorage.getItem("eki.tab") || "（なし）"; } catch (x) { return "読めない"; } });
+  await step("サービスワーカー", async () => (navigator.serviceWorker ? (await navigator.serviceWorker.getRegistrations()).map((r) => (r.active ? r.active.scriptURL.split("/").pop() : "準備中")).join("・") || "なし" : "非対応"));
+  await step("しまってある本体", async () => (window.caches ? (await caches.keys()).join("・") || "なし" : "非対応"));
+  await step("公開中の本体の版", async () => { const t = await (await fetch("eki-stamp/sw.js" + v, { cache: "no-store" })).text(); return (t.match(/VERSION = "([^"]+)"/) || [])[1]; });
+  for (const f of ["ui.js", "db.js", "geo.js", "timeline.js", "roads.js", "map.js", "review.js", "life.js", "linestyle.js"]) {
+    await step(`部品 ${f}`, async () => { await import(`./eki-stamp/${f}${v}`); return "読めた"; });
+  }
+  let st = [], vi = [], keys = [], meta = {};
+  await step("記録を開く", () => idb(async (db) => {
+    [st, vi, keys] = await Promise.all([all(db, "stations"), all(db, "visits"), all(db, "days", true)]);
+    const m = await all(db, "meta", true);
+    return `版${db.version}・駅と施設 ${st.length}・記録 ${vi.length}（確認待ち ${vi.filter((x) => x.pending).length}）・道のり ${keys.length}日・メモ ${m.join(",")}`;
+  }));
+  let days = [];
+  await step("道のりを全部読む", () => idb(async (db) => { days = await all(db, "days"); return `${days.length}日`; }));
+  const geo = await import("./eki-stamp/geo.js" + v), tl = await import("./eki-stamp/timeline.js" + v), rd = await import("./eki-stamp/roads.js" + v);
+  let master = null, roads = null;
+  await step("駅データ", async () => { master = await geo.loadMaster(); return `${master.length}駅`; });
+  await step("SA・銭湯データ", async () => { roads = await rd.loadRoads(); return `${roads.spots.length}か所`; });
+  await step("乗り降りした駅の計算", async () => `${tl.railStops(days, master, 300).length}回`);
+  await step("通った区間の計算", async () => `${tl.railRides(days, master, 300).length}回`);
+  await step("高速／一般道の計算", async () => { let n = 0; for (const d of days) { rd.splitCar(roads, d); n++; } return `${n}日`; });
+  await step("施設の立ち寄りの計算", async () => `${rd.spotStops(roads, days).length}回`);
+  await step("アプリの最初の画面を開く", async () => {
+    // アプリ本体を、見えない枠の中で開いて、最初の画面が出るか確かめる
+    const f = document.createElement("iframe");
+    f.style.cssText = "width:360px;height:600px;border:1px solid #ccc;margin-top:8px";
+    f.src = "eki-stamp/" + v;
+    document.body.appendChild(f);
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        const m = f.contentDocument && f.contentDocument.getElementById("main");
+        if (m && !m.textContent.includes("読み込んでいます")) return `出た：${m.textContent.slice(0, 40)}`;
+      } catch (x) { return "中が見えない：" + x.message; }
+    }
+    throw new Error("20秒たっても「読み込んでいます」のまま");
+  });
+  const li = document.createElement("li");
+  li.textContent = `終わり（全部で${Math.round((performance.now() - t0) / 1000)}秒）`;
+  ol.appendChild(li);
+};
+addEventListener("error", (e) => { const li = document.createElement("li"); li.className = "ng"; li.textContent = `エラー：${e.message} ${(e.filename || "").split("/").pop()}:${e.lineno}`; ol.appendChild(li); });
+addEventListener("unhandledrejection", (e) => { const li = document.createElement("li"); li.className = "ng"; li.textContent = `エラー：${e.reason && (e.reason.message || e.reason)}`; ol.appendChild(li); });
+</script>
+</body>
+</html>
