@@ -268,6 +268,35 @@ dialog#sheet::backdrop{background:rgba(0,0,0,.4)}
 </div>
 <dialog id="sheet"></dialog>
 <div id="toast" class="toast" hidden></div>
+<script>
+// 見張り役：アプリ本体が開けないまま止まったら、原因を画面に出し、本体を取り直すボタンを出す
+// 取り直すのはサービスワーカーとしまってあるファイルだけ。記録（IndexedDB）には触れない
+(function () {
+  var errs = [];
+  addEventListener("error", function (e) { errs.push((e.message || "") + " " + (e.filename || "").split("/").pop() + ":" + (e.lineno || "")); });
+  addEventListener("unhandledrejection", function (e) { errs.push("promise: " + ((e.reason && (e.reason.message || e.reason.name)) || e.reason)); });
+  setTimeout(function () {
+    var m = document.getElementById("main");
+    if (!m || !m.querySelector(".empty") || m.textContent.indexOf("読み込んでいます") < 0) return;
+    m.innerHTML = "";
+    var box = document.createElement("div"); box.className = "card";
+    var p = document.createElement("p"); p.textContent = "うまく開けませんでした。下のボタンで最新の版を取り直してください（記録は消えません）。"; box.appendChild(p);
+    var b = document.createElement("button"); b.className = "primary"; b.textContent = "最新の版を取り直す";
+    b.onclick = function () {
+      b.disabled = true; b.textContent = "取り直しています…";
+      var jobs = [];
+      if (navigator.serviceWorker) jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); }));
+      if (window.caches) jobs.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); }));
+      Promise.all(jobs).then(function () { location.reload(); }, function () { location.reload(); });
+    };
+    box.appendChild(b);
+    var d = document.createElement("p"); d.className = "muted";
+    d.textContent = "原因の手がかり：" + (errs.length ? errs.slice(0, 3).join(" ／ ") : "エラーは出ていません（記録の読み込み待ちで止まっています）");
+    box.appendChild(d);
+    m.appendChild(box);
+  }, 12000);
+})();
+</script>
 <script src="vendor/leaflet.js"></script>
 <script type="module" src="app.js"></script>
 </body>

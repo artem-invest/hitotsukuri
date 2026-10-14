@@ -10,7 +10,7 @@ import { renderReview } from "./review.js";
 import { renderLife } from "./life.js";
 import { lineStyle } from "./linestyle.js";
 
-const APP_VERSION = "2.2.0";
+const APP_VERSION = "2.2.1";
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
 // 朝刊の駅スタンプ帳から引き継いだ記録（2026-10-13時点）。初回起動のときだけ入れる
