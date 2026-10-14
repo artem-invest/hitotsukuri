@@ -1,6 +1,5 @@
 // あしあと帳（もとは駅スタンプ帳）：画面と操作
 // データの流れ： IndexedDB（db.js）→ stations / visits の配列 → render() で画面を作り直す
-import { boot } from "./boot.js";
 import * as db from "./db.js";
 import * as geo from "./geo.js";
 import * as tl from "./timeline.js";
@@ -11,26 +10,11 @@ import { renderReview } from "./review.js";
 import { renderLife } from "./life.js";
 import { lineStyle } from "./linestyle.js";
 
-const APP_VERSION = "2.3.3";
-boot("app.js開始");
+const APP_VERSION = "2.4.0";
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
-// 朝刊の駅スタンプ帳から引き継いだ記録（2026-10-13時点）。初回起動のときだけ入れる
-const SEED = {
-  stations: [
-    { id: "station-musashikoyama", name: "武蔵小山", area: "品川区", firstDate: "2026-10-07", url: "https://www.tokyu.co.jp/railway/station/mg.html" },
-    { id: "station-monzennakacho", name: "門前仲町", area: "江東区", firstDate: "2026-10-08", url: "https://www.tokyometro.jp/station/monzen-nakacho/index.html" },
-    { id: "station-kitasenju", name: "北千住", area: "足立区", firstDate: "2026-10-09", url: "https://www.tokyometro.jp/station/kita-senju/index.html" },
-    { id: "station-sangenjaya", name: "三軒茶屋", area: "世田谷区", firstDate: "2026-10-12", url: "https://www.tokyu.co.jp/railway/station/dt.html" },
-    { id: "station-tsukiji", name: "築地", area: "中央区", firstDate: "2026-10-13", url: "https://www.tokyometro.jp/station/tsukiji/index.html" },
-  ].map((s) => ({ ...s, lat: null, lng: null, source: "chokan" })),
-  visits: [
-    { stationId: "station-musashikoyama", at: "2026-10-09T01:40:59.752Z" },
-    { stationId: "station-monzennakacho", at: "2026-10-09T01:40:36.666Z" },
-    { stationId: "station-sangenjaya", at: "2026-10-12T12:35:35.168Z" },
-    { stationId: "station-kitasenju", at: "2026-10-12T13:51:02.769Z" },
-  ].map((v) => ({ id: "seed-" + v.stationId, ...v, how: "chokan", lat: null, lng: null })),
-};
+// 朝刊の駅スタンプ帳から引き継いだ駅（2.4.0 で本人の希望により外した）。記録が残っていれば起動時に1回だけ消す
+const CHOKAN = ["station-musashikoyama", "station-monzennakacho", "station-kitasenju", "station-sangenjaya"];
 
 /* ---------- 小道具 ---------- */
 const uid = (p) => `${p}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -62,29 +46,13 @@ tab = { stamps: "home", log: "review" }[tab] || tab;
 const visitsOf = (id) => visits.filter((v) => v.stationId === id).sort((a, b) => a.at.localeCompare(b.at));
 
 async function load() {
-  let all;
-  boot("記録を読む");
-  // 待たされたら、つなぎ直して2回まで読み直す。だめなら案内を出す
-  for (let tries = 1; ; tries++) {
-    try {
-      const r = await db.readAll(["stations", "visits"], 3000);
-      [stations, all] = [r.stations, r.visits];
-      break;
-    } catch (e) {
-      if (!e.busy || tries >= 3) throw e.busy ? new Error("ほかの画面が記録を使ったまま止まっています") : e;
-      boot(`待たされたのでつなぎ直す（${tries}回目）`);
-      db.reconnect();
-    }
-  }
-  boot("記録を読んだ");
+  const [st, all] = await Promise.all([db.getAll("stations"), db.getAll("visits")]);
+  stations = st;
   visits = all.filter((v) => !v.pending);
   pending = all.filter((v) => v.pending).sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
-  boot("設定を読む");
   meta.lastExport = await db.getMeta("lastExport");
   life = (await db.getMeta("life")) || { places: [], candidates: [] };
-  boot("日付の一覧を読む");
   dayKeys = (await db.getAllKeys("days")).sort();
-  boot("画面を作る");
   allDays = null;
   rides = null;
   render();
@@ -109,13 +77,20 @@ async function linkMaster() {
   await db.putMany(changed);
 }
 
-async function seedIfFirst() {
-  if (await db.getMeta("seeded")) return;
-  await db.putMany([
-    ...SEED.stations.map((s) => ["stations", s]),
-    ...SEED.visits.map((v) => ["visits", v]),
-  ]);
-  await db.setMeta("seeded", new Date().toISOString());
+// 朝刊から来た記録を外す（1回だけ）。タイムラインなど別の記録がある駅は、駅そのものは残す
+async function dropChokanOnce() {
+  if ((await db.getMeta("chokanDropped")) === 1) return;
+  const [all, sts] = await Promise.all([db.getAll("visits"), db.getAll("stations")]);
+  const kept = [];
+  for (const id of CHOKAN) {
+    const mine = all.filter((v) => v.stationId === id);
+    if (!mine.some((v) => v.how !== "chokan")) { await db.removeStation(id); continue; }
+    for (const v of mine) if (v.how === "chokan") await db.remove("visits", v.id);
+    kept.push(sts.find((s) => s.id === id)?.name);
+  }
+  await db.setMeta("chokanDropped", 1);
+  if (kept.length) setTimeout(() => toast(`朝刊からの記録を外しました。${kept.join("・")}は自分の記録があるので残しています`), 500);
+  try { localStorage.removeItem("eki.bootlog"); sessionStorage.removeItem("eki.bootlog.cur"); } catch {} // 不具合調査（2.3.x）の名残
 }
 
 // 「このサイトのデータは消さないで」とブラウザに頼む。断られても動作はする
@@ -411,10 +386,6 @@ async function importJson(file) {
 
 /* ---------- 画面 ---------- */
 function render() {
-  boot(`描く:${tab}`);
-  try { renderBody(); } finally { boot(`描いた:${tab}`); }
-}
-function renderBody() {
   document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
   const went = stations.filter((s) => visitsOf(s.id).length);
   const spots = went.filter(isSpot).length;
@@ -932,7 +903,6 @@ async function openDay(date, s, back = null) {
 }
 
 /* ---------- 起動 ---------- */
-boot("タブの準備");
 document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
   tab = b.dataset.tab;
   try { localStorage.setItem("eki.tab", tab); } catch {}
@@ -957,40 +927,19 @@ if ("serviceWorker" in navigator) {
 
 (async () => {
   try {
-    boot("初回の準備");
-    await seedIfFirst();
+    await dropChokanOnce();
     await load();
-    boot("最初の画面が出た");
   } catch (e) {
-    boot("起動で失敗：" + (e?.message || e));
-    const busy = String(e?.message || "").includes("ほかの画面");
     $("#main").replaceChildren(h("section", { class: "card" },
-      h("h2", { text: busy ? "記録がほかの画面に使われたまま止まっています" : "記録を読み込めませんでした" }),
-      busy ? h("ol", { class: "steps" },
-        h("li", { text: "スマホの「最近使ったアプリ」を開き、あしあと帳とChromeを上にスワイプして全部閉じる" }),
-        h("li", { text: "それでも同じなら、スマホを再起動する" }),
-        h("li", { text: "あしあと帳だけを開く（Chromeのタブでは開かない）" })) : h("p", { text: String(e?.message || e) }),
+      h("h2", { text: "記録を読み込めませんでした" }),
+      h("p", { text: String(e?.message || e) }),
       h("p", { class: "muted", text: "記録は消えていません。" }),
       h("button", { type: "button", class: "primary", text: "もう一度読む", onclick: () => location.reload() })));
     return;
   }
-  // 最初の画面を、次の処理より先に必ず画面に出す（スマホで、描いたのに表示されないまま固まった）
-  await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 50)));
-  boot("最初の画面を表示した");
-  boot("保存の確保");
   meta.persisted = await askPersist().catch(() => "unsupported");
   if (tab === "backup") render();
-  try {
-    boot("駅データ"); master = await geo.loadMaster();
-    boot("駅を結びつける"); await linkMaster(); render();
-    boot("通った区間"); await loadRides(); render();
-  } catch (e) { boot("失敗:" + (e?.message || e)); }
-  try {
-    boot("施設の見直し"); await recheckSpotsOnce(); render();
-    boot("施設のさかのぼり"); await backfillSpots();
-    boot("駅の見直し"); await recheckStationsOnce(); render();
-  } catch (e) { boot("失敗:" + (e?.message || e)); }
-  boot("現在地の確認");
-  if (await geo.permitted()) { boot("近くの駅を探す"); findNear(); }
-  boot("起動おわり");
+  try { master = await geo.loadMaster(); await linkMaster(); render(); await loadRides(); render(); } catch {}
+  try { await recheckSpotsOnce(); render(); await backfillSpots(); await recheckStationsOnce(); render(); } catch {}
+  if (await geo.permitted()) findNear(); // 許可済みなら、開いたときに自動で探す
 })();
