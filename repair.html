@@ -104,6 +104,14 @@ document.getElementById("fix").onclick = async (e) => {
     for (const k of keys) await caches.delete(k);
     log(`しまってあったアプリの本体を捨てました：${keys.join("・") || "なし"}`);
   } catch (err) { log("アプリの本体を捨てられませんでした：" + err.message); }
+  // Chrome が一時的に取っておいたファイル（最大10分）も、サーバーから取り直して最新にする
+  try {
+    const sw = await (await fetch("eki-stamp/sw.js", { cache: "reload" })).text();
+    const files = [...sw.matchAll(/"\.\/([^"]*)"/g)].map((m) => "eki-stamp/" + m[1]);
+    let n = 0;
+    for (const f of files) { try { await fetch(f, { cache: "reload" }); n++; } catch (x) {} }
+    log(`アプリのファイルを最新に取り直しました：${n}件（版 ${(sw.match(/VERSION = "([^"]+)"/) || [])[1]}）`);
+  } catch (err) { log("ファイルを取り直せませんでした：" + err.message); }
   try {
     const r = await withTimeout(checkDb(), 8000);
     log(`記録は無事です：駅・施設 ${r.stations ?? "?"}・記録 ${r.visits ?? "?"}・道のり ${r.days ?? "?"}日（データベースの版 ${r.version}）`);

@@ -11,7 +11,7 @@ import { renderReview } from "./review.js";
 import { renderLife } from "./life.js";
 import { lineStyle } from "./linestyle.js";
 
-const APP_VERSION = "2.3.1";
+const APP_VERSION = "2.3.2";
 boot("app.js開始");
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
@@ -968,6 +968,9 @@ if ("serviceWorker" in navigator) {
       h("button", { type: "button", class: "primary", text: "もう一度読む", onclick: () => location.reload() })));
     return;
   }
+  // 最初の画面を、次の処理より先に必ず画面に出す（スマホで、描いたのに表示されないまま固まった）
+  await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 50)));
+  boot("最初の画面を表示した");
   boot("保存の確保");
   meta.persisted = await askPersist().catch(() => "unsupported");
   if (tab === "backup") render();
