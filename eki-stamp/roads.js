@@ -51,7 +51,7 @@ export function loadRoads() {
 }
 
 // 点 p から線分 ab までの距離[m]（狭い範囲なので平面とみなす）
-function segDist(p, a, b) {
+export function segDist(p, a, b) {
   const k = Math.cos((p[0] * Math.PI) / 180);
   const ax = (a[1] - p[1]) * 111320 * k, ay = (a[0] - p[0]) * 110540;
   const bx = (b[1] - p[1]) * 111320 * k, by = (b[0] - p[0]) * 110540;
@@ -140,6 +140,52 @@ export function spotStops(r, days) {
       hit(st.at[0], st.at[1], st.s, (s) => mins >= KINDS[s.kind].minStay, mins);
     }
     for (const a of d.acts) if (a.mode === "car") { hit(a.a[0], a.a[1], a.s, road); hit(a.b[0], a.b[1], a.e, road); }
+  }
+  return out;
+}
+
+// 高速道路ごとの SA・PA の並び（hwroutes.json。tools/build_hwroutes.py で roads.json から作る）
+// routes: [{legal: 法令名, name: 呼び名, sym: 記号, places: [{name, ids: [spot id（上り・下りなど）]}]}]
+let hwLoading = null;
+export function loadHwRoutes() {
+  hwLoading ||= fetch("./hwroutes.json")
+    .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then((d) => d.routes.map(([legal, name, sym, places]) => ({ legal, name, sym, places: places.map(([n, ids]) => ({ name: n, ids })) })))
+    .catch((e) => { hwLoading = null; throw e; });
+  return hwLoading;
+}
+
+const PASS_M = 1500; // 高速を走った区間（点と点を結んだ線）からこの距離[m]以内の SA・PA を「通った」とする（点がまばらなので広め）
+// 車で高速を走った日に、そばを通った SA・PA → Map(場所のキー＝ids[0] → Set(日付))
+export function hwPasses(r, routes, days) {
+  const grid = new Map(); // 約1km四方のマス目 → [場所]
+  for (const rt of routes) for (const p of rt.places) {
+    const s = r.byId[p.ids[0]];
+    if (!s) continue;
+    const k = key(s.lat, s.lng);
+    if (!grid.has(k)) grid.set(k, []);
+    grid.get(k).push({ key: p.ids[0], lat: s.lat, lng: s.lng });
+  }
+  const out = new Map();
+  const R = 2; // 線分の外側 2マス（約2km）まで見る
+  for (const d of days) {
+    if (!d.acts.some((a) => a.mode === "car")) continue;
+    for (const seg of splitCar(r, d).segs) {
+      if (!seg.hw) continue;
+      for (let i = 1; i < seg.path.length; i++) {
+        const a = seg.path[i - 1], b = seg.path[i];
+        const x0 = Math.floor(Math.min(a[0], b[0]) / CELL) - R, x1 = Math.floor(Math.max(a[0], b[0]) / CELL) + R;
+        const y0 = Math.floor(Math.min(a[1], b[1]) / CELL) - R, y1 = Math.floor(Math.max(a[1], b[1]) / CELL) + R;
+        if ((x1 - x0) * (y1 - y0) > 40000) continue; // 点が飛びすぎ（数百km）
+        for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+          for (const p of grid.get(`${x},${y}`) || []) {
+            if (out.get(p.key)?.has(d.date) || segDist([p.lat, p.lng], a, b) > PASS_M) continue;
+            if (!out.has(p.key)) out.set(p.key, new Set());
+            out.get(p.key).add(d.date);
+          }
+        }
+      }
+    }
   }
   return out;
 }

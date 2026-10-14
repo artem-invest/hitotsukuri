@@ -246,6 +246,18 @@ dialog#sheet::backdrop{background:rgba(0,0,0,.4)}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);
   background:var(--ink-text);color:var(--bg);padding:8px 14px;border-radius:8px;font-size:.85rem;z-index:10;max-width:calc(100% - 32px)}
 [hidden]{display:none!important}
+/* 2.5.0：路線タブの電車／高速の切り替え・高速の記号・さがす・日曜日の案内 */
+.seg{display:inline-flex;border:1.5px solid var(--line);border-radius:999px;overflow:hidden;margin:4px 0 8px}
+.seg button{border:0;background:none;padding:6px 16px;font:inherit;font-weight:700;color:var(--muted)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:#fff}
+.lbadge.hwsym{border-radius:6px;border:0;background:var(--lc);color:#fff;min-width:2.6em;height:1.9em;font-size:.75rem}
+details.hw .route li{cursor:pointer}
+.find input{width:100%;font-size:16px;padding:8px 10px}
+.found{list-style:none;margin:8px 0 0;padding:0}
+.found li{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--line)}
+.found small{flex:1 1 auto;color:var(--muted);font-size:.75rem}
+.weekly{border-color:var(--accent)}
+.weekly h2{font-size:1rem}
 </style>
 </head>
 <body>

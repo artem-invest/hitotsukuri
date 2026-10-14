@@ -10,7 +10,7 @@ import { renderReview } from "./review.js";
 import { renderLife } from "./life.js";
 import { lineStyle } from "./linestyle.js";
 
-const APP_VERSION = "2.4.0";
+const APP_VERSION = "2.5.0";
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
 // 朝刊の駅スタンプ帳から引き継いだ駅（2.4.0 で本人の希望により外した）。記録が残っていれば起動時に1回だけ消す
@@ -38,6 +38,11 @@ let allDays = null;           // 月ごとの距離・乗った区間を出す�
 let roads = null;              // SA・PA・道の駅と高速道路（rd.loadRoads）
 let reviewYear = null;        // 年報で見ている年
 let life = { places: [], candidates: [] }; // 家探し：場所の名前・大事さ・候補の駅（meta "life"）
+let hwRoutes = null;          // 高速道路ごとの SA・PA の並び（rd.loadHwRoutes）
+let hwPass = null;            // 高速で通った SA・PA → 日付（rd.hwPasses）。タイムラインから計算
+let findIdx = null;           // さがす：駅・施設ごとに、タイムラインで乗り降り・立ち寄り・通った日
+let linesMode = "train";      // 路線タブ：train（電車）／ hw（高速）
+try { linesMode = localStorage.getItem("eki.linesMode") || "train"; } catch {}
 let rides = null;             // 乗った区間 {byLine: Map(路線番号 → Set(駅ID)), count}。タイムラインから計算
 try { tab = localStorage.getItem("eki.tab") || "home"; } catch {}
 // 2.0.0 でタブを組み替えた（スタンプ→最近・図鑑、記録→年報と図鑑へ）
@@ -51,10 +56,14 @@ async function load() {
   visits = all.filter((v) => !v.pending);
   pending = all.filter((v) => v.pending).sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
   meta.lastExport = await db.getMeta("lastExport");
+  meta.lastTimeline = await db.getMeta("lastTimeline");
+  meta.tlSkip = await db.getMeta("timelineSkip");
   life = (await db.getMeta("life")) || { places: [], candidates: [] };
   dayKeys = (await db.getAllKeys("days")).sort();
   allDays = null;
   rides = null;
+  hwPass = null;
+  findIdx = null;
   render();
 }
 
@@ -400,6 +409,20 @@ function render() {
   else renderBackup(main);
 }
 
+// 週に1回（日曜日）タイムラインの読み込みを促す。日曜に読めなかったら、次の土曜まで出したまま
+function timelineNudge() {
+  if (!dayKeys.length) return null;
+  const now = new Date();
+  const sun = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()); // 直近の日曜 0:00
+  const sunKey = localDay(sun.toISOString());
+  if ((meta.lastTimeline && Date.parse(meta.lastTimeline) >= sun.getTime()) || meta.tlSkip === sunKey) return null;
+  return h("section", { class: "card weekly" },
+    h("h2", { text: now.getDay() === 0 ? "日曜日：今週のタイムラインを読み込む日です" : "今週のタイムラインがまだです" }),
+    h("p", { class: "muted", text: `スマホの「設定」→「位置情報」→「位置情報サービス」→「タイムライン」→「タイムライン データをエクスポート」で保存して、下のボタンで選んでください。${meta.lastTimeline ? `前回は${md(meta.lastTimeline)}。` : ""}` }),
+    h("div", { class: "btns" }, ...timelinePicker("タイムラインを読み込む", true),
+      h("button", { type: "button", class: "small", text: "今週はしない", onclick: async () => { meta.tlSkip = sunKey; await db.setMeta("timelineSkip", sunKey); render(); } })));
+}
+
 function backupNudge() {
   const days = meta.lastExport ? (Date.now() - Date.parse(meta.lastExport)) / 86400000 : Infinity;
   if (days < 30 || !visits.length) return null;
@@ -470,7 +493,7 @@ async function loadRides() {
     for (const id of r.ids) set.add(id);
     byLine.set(r.li, set);
   }
-  rides = { byLine, count: list.length };
+  rides = { byLine, count: list.length, list };
 }
 
 // 降りた駅か通った区間が1つでもある路線と、その埋まり具合
@@ -525,7 +548,183 @@ function renderNext() {
       h("a", { class: "maplink", href: `https://www.google.com/maps/search/?api=1&query=${geo.center(m).lat},${geo.center(m).lng}`, target: "_blank", rel: "noopener", text: "地図" })))));
 }
 
+/* ---------- 高速道路（路線と同じ塗り絵。SA・PA が駅のかわり） ---------- */
+async function loadHw() {
+  await ensureAll();
+  hwRoutes ||= await rd.loadHwRoutes();
+  if (!roads) throw new Error("道路データを読み込めませんでした");
+  hwPass ||= rd.hwPasses(roads, hwRoutes, allDays || []);
+}
+
+const placeWent = (p) => p.ids.some((id) => visitsOf(id).length);
+
+function renderHighways(main) {
+  if (!hwRoutes || !hwPass) {
+    const msg = h("p", { class: "empty", text: "走った高速を計算しています…" });
+    main.append(msg);
+    // 計算できたときだけ描き直す（できないまま描き直すと回り続ける：2.3.3 で直した不具合と同じ形）
+    loadHw().then(() => { if (tab === "lines" && linesMode === "hw" && hwPass) render(); },
+      () => { msg.textContent = "道路データを読み込めませんでした。電波のある所で開き直してください。"; });
+    return;
+  }
+  const list = hwRoutes.map((r) => {
+    const days = new Set();
+    for (const p of r.places) for (const d of hwPass.get(p.ids[0]) || []) days.add(d);
+    const on = r.places.filter(placeWent).length;
+    const via = r.places.filter((p) => !placeWent(p) && hwPass.has(p.ids[0])).length;
+    return { ...r, on, via, days, total: r.places.length };
+  }).filter((r) => r.on || r.via)
+    .sort((a, b) => b.on - a.on || b.days.size - a.days.size); // 立ち寄った数 → よく走った順
+  if (!list.length) {
+    main.append(h("p", { class: "empty", text: "タイムラインで車で高速を走った日や、立ち寄った SA・PA があると、その高速がここに並びます。" }));
+    return;
+  }
+  main.append(h("p", { class: "linesum" }, h("b", { text: `${list.length}本` }), ` の高速にあしあと・SA・PA に立ち寄り ${list.reduce((n, r) => n + r.on, 0)}`));
+  main.append(h("p", { class: "legend" },
+    h("span", { class: "on" }, h("i"), "立ち寄った"), h("span", { class: "via" }, h("i"), "通った"), h("span", {}, h("i"), "まだ")));
+  for (const r of list) {
+    const pct = (n) => Math.round((n / r.total) * 1000) / 10;
+    const last = [...r.days].sort().at(-1);
+    main.append(h("details", { class: "line hw" + (r.on === r.total ? " full" : ""), style: "--lc:#1f7a4a" },
+      h("summary", {},
+        h("span", { class: "lbadge hwsym", text: r.sym || "高速" }),
+        h("span", { class: "ln", text: r.name }),
+        h("span", { class: "cnt", text: r.on === r.total ? "制覇！" : `${r.on}/${r.total}` }),
+        h("span", { class: "bar" }, h("i", { style: `width:${pct(r.on)}%` }), h("i", { class: "via", style: `width:${pct(r.via)}%` })),
+        h("small", { class: "sub", text: [r.days.size ? `走った日 ${r.days.size}日（最後は${md(last + "T12:00")}）` : "", r.via ? `通った SA・PA を入れると ${r.on + r.via}/${r.total}` : ""].filter(Boolean).join("・") })),
+      h("ol", { class: "route" }, r.places.map((p) => h("li", { class: placeWent(p) ? "on" : hwPass.has(p.ids[0]) ? "via" : "", onclick: () => openFind(spotItem(roads.byId[p.ids[0]])) },
+        h("i"), h("span", { text: p.name }))))));
+  }
+  main.append(h("p", { class: "hint", text: "高速をタップすると、東京に近い側から SA・PA が並びます。名前をタップすると、行った日・通った日とその日のルートが見られます。「通った」はタイムラインの車の道のりからの推定です（点がまばらなので、そばを走っただけでも入ることがあります）。上り・下りは1か所にまとめています。" }));
+}
+
+/* ---------- さがす：駅や施設に行ったことがあるかを、タイムラインまでさかのぼって調べる ---------- */
+const placeOf = (id) => hwRoutes?.flatMap((r) => r.places).find((p) => p.ids.includes(id)) || null;
+
+function stationItem(m) {
+  const c = geo.center(m);
+  return { kind: "station", key: m.id, gid: m.id, m, name: m.name, label: "駅", lines: m.lines, lat: c.lat, lng: c.lng };
+}
+function spotItem(sp) {
+  const p = placeOf(sp.id);
+  return { kind: "spot", key: p ? p.ids[0] : sp.id, ids: p ? p.ids : [sp.id], sp, name: p ? p.name : sp.name, label: rd.KINDS[sp.kind].label, lat: sp.lat, lng: sp.lng };
+}
+// その場所の図鑑の台（駅・施設。SA・PA は上り・下りで複数）
+const zukanOf = (it) => (it.kind === "station" ? stations.filter((x) => x.gid === it.gid) : stations.filter((x) => it.ids.includes(x.id)));
+const itemVisits = (it) => zukanOf(it).flatMap((s) => visitsOf(s.id));
+
+function findCandidates(q) {
+  q = q.trim().replace(/駅$/, "");
+  if (!q) return [];
+  const out = geo.search(master, q, 6).map(stationItem);
+  const seen = new Set();
+  for (const sp of roads.spots) {
+    if (!sp.name.includes(q)) continue;
+    const it = spotItem(sp);
+    if (seen.has(it.key)) continue;
+    seen.add(it.key);
+    out.push(it);
+    if (seen.size >= 8) break;
+  }
+  return out;
+}
+
+// 駅・施設ごとに、タイムラインで見つかった日と、その日に何をしたか
+async function loadFind() {
+  await ensureAll();
+  hwRoutes ||= await rd.loadHwRoutes();
+  if (!master || !roads) throw new Error("駅・道路のデータを読み込めませんでした");
+  await loadRides();
+  hwPass ||= rd.hwPasses(roads, hwRoutes, allDays || []);
+  if (findIdx) return;
+  const days = allDays || [];
+  const idx = new Map(); // key → Map(日付 → Set(何をしたか))
+  const put = (k, date, what) => {
+    if (!idx.has(k)) idx.set(k, new Map());
+    const m = idx.get(k);
+    if (!m.has(date)) m.set(date, new Set());
+    m.get(date).add(what);
+  };
+  const dayOf = (t) => localDay(new Date(t * 1000).toISOString());
+  for (const { m, t } of tl.railStops(days, master, geo.STAMP_RADIUS)) put(m.id, dayOf(t), "乗り降り");
+  for (const r of rides?.list || []) for (const id of r.ids.slice(1, -1)) put(id, r.date, "電車で通過");
+  for (const { spot, t } of rd.spotStops(roads, days)) put(placeOf(spot.id)?.ids[0] || spot.id, dayOf(t), "近くに立ち寄り");
+  for (const [k, dates] of hwPass) for (const d of dates) put(k, d, "高速で通過");
+  findIdx = idx;
+}
+
+function renderFind(main) {
+  const res = h("ul", { class: "sugg" });
+  const q = h("input", { type: "search", placeholder: "駅・SA・PA・道の駅・銭湯の名前", autocomplete: "off", enterkeyhint: "search",
+    oninput: async () => {
+      const v = q.value;
+      try { master ||= await geo.loadMaster(); roads ||= await rd.loadRoads(); hwRoutes ||= await rd.loadHwRoutes(); } catch { return; }
+      if (q.value !== v) return;
+      res.replaceChildren(...findCandidates(v).map((it) => h("li", {},
+        h("button", { type: "button", onclick: () => openFind(it) },
+          h("b", { text: it.name }),
+          h("small", { text: [it.name.includes(it.label) ? "" : it.label, it.lines, itemVisits(it).length ? "図鑑にあり" : ""].filter(Boolean).join("・") })))));
+    } });
+  main.append(h("section", { class: "card find" },
+    h("h2", { text: "行ったことある？" }),
+    q, res,
+    h("p", { class: "muted", text: "名前で探すと、タイムラインの記録までさかのぼって、乗り降りした日・立ち寄った日・通った日を出します。日付をタップするとその日のルート。" })));
+}
+
+// さがした場所の1枚：図鑑の記録と、タイムラインで見つかった日の一覧
+async function openFind(it) {
+  const dlg = $("#sheet");
+  const body = h("div", {}, h("p", { class: "muted", text: "記録を調べています…" }));
+  dlg.replaceChildren(h("div", { class: "sheet" },
+    h("header", {},
+      h("h2", { text: it.name }),
+      h("button", { type: "button", class: "close", "aria-label": "閉じる", text: "×", onclick: () => dlg.close() })),
+    h("p", { class: "muted", text: [it.label, it.lines].filter(Boolean).join("・") }),
+    body));
+  if (!dlg.open) dlg.showModal();
+  try { await loadFind(); } catch (e) { body.replaceChildren(h("p", { class: "muted", text: String(e?.message || e) })); return; }
+  const back = () => openFind(it);
+  const here = { lat: it.lat, lng: it.lng, name: it.name, kind: it.sp?.kind };
+  const vs = itemVisits(it).sort((a, b) => a.at.localeCompare(b.at));
+  const mine = zukanOf(it);
+  const rows = [...(findIdx.get(it.key) || new Map())].sort((a, b) => b[0].localeCompare(a[0]));
+  const dayBtn = (d) => (dayKeys.includes(d)
+    ? h("button", { type: "button", class: "linkish", text: ymd(d + "T12:00"), onclick: () => openDay(d, here, back) })
+    : h("span", { text: ymd(d + "T12:00") }));
+  body.replaceChildren(
+    vs.length
+      ? h("div", { class: "vrow" },
+          h("span", {}, h("b", { text: `図鑑にあり・${vs.filter((v) => !v.pending).length}回` }), vs.some((v) => v.pending) ? "（確認待ちあり）" : ""),
+          h("button", { type: "button", class: "small", text: "図鑑のページ", onclick: () => openSheet(mine.find((s) => visitsOf(s.id).length) || mine[0]) }))
+      : h("p", { class: "muted", text: mine.some((s) => s.rejected) ? "以前「行ってない」にした場所です。" : "図鑑にはまだありません。" }),
+    rows.length
+      ? h("div", {},
+          h("h3", { class: "gridhead", text: `タイムラインで見つかった日（${rows.length}日）` }),
+          h("ol", { class: "found" }, rows.slice(0, 60).map(([d, what]) => h("li", {},
+            dayBtn(d),
+            h("small", { text: [...what].join("・") }),
+            vs.length ? null : h("button", { type: "button", class: "small", text: "行った", onclick: () => addFound(it, d) })))),
+          rows.length > 60 ? h("p", { class: "muted", text: `ほか ${rows.length - 60}日` }) : null)
+      : h("p", { class: "muted", text: dayKeys.length ? `タイムラインの記録（${ymd(dayKeys[0] + "T12:00")}〜）には見つかりませんでした。` : "タイムラインを読み込むと、さかのぼって探せます。" }),
+    h("p", { class: "links" }, h("a", { href: `https://www.google.com/maps/search/?api=1&query=${it.lat},${it.lng}`, target: "_blank", rel: "noopener", text: "地図で見る" })));
+}
+
+// さがした場所を、見つかった日に行ったこととして図鑑に入れる
+async function addFound(it, date) {
+  const at = new Date(date + "T12:00").toISOString();
+  const s = it.kind === "station" ? await ensureStation(it.m, date, "timeline") : await ensureSpot(it.sp, date, "timeline");
+  if (s.rejected) { s.rejected = false; await db.put("stations", s); }
+  await db.put("visits", { id: uid("v"), stationId: s.id, at, how: "timeline", lat: null, lng: null, acc: null });
+  await load();
+  toast(`${it.name} を図鑑に入れました（${ymd(at)}）`);
+  openFind(it);
+}
+
 function renderLines(main) {
+  const mode = (m, label) => h("button", { type: "button", "aria-pressed": String(linesMode === m), text: label,
+    onclick: () => { linesMode = m; try { localStorage.setItem("eki.linesMode", m); } catch {} render(); } });
+  main.append(h("div", { class: "seg" }, mode("train", "電車"), mode("hw", "高速道路")));
+  if (linesMode === "hw") { renderHighways(main); return; }
   if (dayKeys.length && !rides) {
     main.append(h("p", { class: "empty", text: "乗った区間を計算しています…" }));
     // 計算できたときだけ描き直す（できないまま描き直すと、また loadRides を呼んで回り続ける）
@@ -563,7 +762,7 @@ function renderLines(main) {
 
 /* ---------- 最近のあしあと（最初の画面） ---------- */
 function renderHome(main) {
-  main.append(backupNudge() || "", renderConfirm() || "");
+  main.append(timelineNudge() || "", backupNudge() || "", renderConfirm() || "");
   if (dayKeys.length && (!allDays || (!roads && !summaryTried))) {
     main.append(h("p", { class: "empty", text: "記録を集計しています…" }));
     ensureAll().then(() => { if (tab === "home") render(); });
@@ -628,6 +827,7 @@ function ensureAll() {
 /* ---------- あしあと図鑑 ---------- */
 function renderZukan(main) {
   main.append(renderConfirm() || "");
+  renderFind(main);
   const mine = stations.filter((s) => visitsOf(s.id).length);
   if (!mine.length) {
     main.append(h("p", { class: "empty", text: "まだありません。タイムラインを読み込むか、駅で「今いる場所を記録する」を押すと、初めて行った駅や施設がここに並びます。" }));
