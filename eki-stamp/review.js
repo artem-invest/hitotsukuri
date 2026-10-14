@@ -4,7 +4,7 @@ import { h, ymd, km } from "./ui.js";
 import * as tl from "./timeline.js";
 import * as rd from "./roads.js";
 
-const ORDER = ["train", "hw", "general", "car", "walk", "bike", "bus", "other"];
+const ORDER = ["train", "hw", "general", "car", "walk", "bike", "bus", "boat", "other"];
 const LABEL = { hw: "高速", general: "一般道" };
 const COLOR = { hw: "#1d3f8f", general: "#79a6e8" };
 const label = (m) => LABEL[m] || tl.MODES[m]?.label || m;

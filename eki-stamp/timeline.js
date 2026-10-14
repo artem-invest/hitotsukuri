@@ -9,6 +9,7 @@ export const MODES = {
   walk: { label: "徒歩", color: "#3a9a62" },
   bus: { label: "バス", color: "#c7772a" },
   bike: { label: "自転車", color: "#9a5bb3" },
+  boat: { label: "船", color: "#1f8a9e" },
   fly: { label: "飛行機", color: "#8a8f98" },
   other: { label: "その他", color: "#8a8f98" },
 };
@@ -16,6 +17,7 @@ const MODE_OF = {
   IN_TRAIN: "train", IN_SUBWAY: "train", IN_TRAM: "train",
   IN_PASSENGER_VEHICLE: "car", IN_BUS: "bus",
   WALKING: "walk", RUNNING: "walk", CYCLING: "bike", FLYING: "fly",
+  IN_FERRY: "boat", SAILING: "boat",
 };
 
 const r5 = (x) => Math.round(x * 1e5) / 1e5;
@@ -148,6 +150,24 @@ export function dayLines(d) {
 }
 
 // 手段ごとの距離 {train: 12.3, ...}
+// 海の上を走った「車」を船に直す。Googleは小さな船（釣り船など）を乗用車と判定することがある（2026-07-02 本人の実例）
+// isSea(緯度, 経度) は陸から遠い海の上か。移動中の点（両端を含む）の半分以上・3点以上が海なら船とみなす
+// 半分にしたのは、北海道の山道（天馬街道など）にも陸の手がかりが少ない所があり、そこを一部通る車の移動を船にしないため
+export function fixBoats(days, isSea) {
+  const changed = [];
+  for (const d of days) {
+    let hit = false;
+    for (const a of d.acts) {
+      if (a.mode !== "car") continue;
+      const pts = [a.a, ...d.pts.filter((p) => p[0] >= a.s && p[0] <= a.e).map((p) => [p[1], p[2]]), a.b];
+      const sea = pts.filter((p) => isSea(p[0], p[1])).length;
+      if (sea >= 3 && sea * 2 >= pts.length) { a.mode = "boat"; hit = true; }
+    }
+    if (hit) changed.push(d);
+  }
+  return changed;
+}
+
 export function kmByMode(acts) {
   const out = {};
   for (const a of acts) out[a.mode] = Math.round(((out[a.mode] || 0) + a.km) * 10) / 10;

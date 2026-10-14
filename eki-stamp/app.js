@@ -10,7 +10,7 @@ import { renderReview } from "./review.js";
 import { renderLife } from "./life.js";
 import { lineStyle } from "./linestyle.js";
 
-const APP_VERSION = "2.6.0";
+const APP_VERSION = "2.7.0";
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
 // 朝刊の駅スタンプ帳から引き継いだ駅（2.4.0 で本人の希望により外した）。記録が残っていれば起動時に1回だけ消す
@@ -66,6 +66,17 @@ async function load() {
   hwPass = null;
   findIdx = null;
   render();
+}
+
+// 2.7.0 より前に読み込んだ記録の、海の上の「車」を1回だけ船に直す
+async function fixBoatsOnce() {
+  if (!dayKeys.length || (await db.getMeta("boatFix")) === 1) return;
+  roads ||= await rd.loadRoads();
+  allDays ||= await db.getAll("days");
+  const changed = tl.fixBoats(allDays, rd.seaTest(master, roads));
+  await db.putMany(changed.map((d) => ["days", d]));
+  await db.setMeta("boatFix", 1);
+  if (changed.length) { hwPass = null; findIdx = null; toast(`海の上の移動 ${changed.length}日分を「船」に直しました`); }
 }
 
 // 位置の無い駅（朝刊から来た駅・手で足した駅）を、名前が1つに決まれば全国データと結びつける
@@ -199,6 +210,7 @@ async function importTimeline(file) {
   catch { toast("タイムラインの書き出しファイルではありません"); return; }
   if (!days.length) { toast("移動の記録がありませんでした"); return; }
   try { master ||= await geo.loadMaster(); } catch { toast("駅データを読み込めませんでした"); return; }
+  try { roads ||= await rd.loadRoads(); tl.fixBoats(days, rd.seaTest(master, roads)); } catch {} // 海の上の「車」は船に
   // 同じ日がもうあれば、記録が詳しいほう（点と移動の数が多いほう）を残す。
   // 足し合わせないのは、2台のスマホが同じ移動を記録していると距離が二重になるため
   const size = (d) => d.pts.length + d.acts.length * 5;
@@ -1189,7 +1201,7 @@ if ("serviceWorker" in navigator) {
   }
   meta.persisted = await askPersist().catch(() => "unsupported");
   if (tab === "backup") render();
-  try { master = await geo.loadMaster(); await linkMaster(); render(); await loadRides(); render(); } catch {}
+  try { master = await geo.loadMaster(); await fixBoatsOnce(); await linkMaster(); render(); await loadRides(); render(); } catch {}
   try { await recheckSpotsOnce(); render(); await backfillSpots(); await recheckStationsOnce(); render(); } catch {}
   if (await geo.permitted()) findNear(); // 許可済みなら、開いたときに自動で探す
 })();

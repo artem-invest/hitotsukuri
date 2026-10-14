@@ -195,3 +195,18 @@ export function hwPasses(r, routes, days) {
   }
   return out;
 }
+
+// 陸から遠い海の上か（船の見分けに使う）。駅・施設・高速道路のどれも、周り約10〜20km（0.1度のマス目とその隣）に無ければ海
+// 東京湾の中や港の近くは陸になる（アクアラインや沿岸の道を船と取り違えないため）
+export function seaTest(master, r) {
+  const land = new Set();
+  const k = (la, lo) => `${Math.floor(la * 10)},${Math.floor(lo * 10)}`;
+  for (const m of master) for (const p of m.pts) land.add(k(p[1], p[0]));
+  for (const s of r.spots) land.add(k(s.lat, s.lng));
+  for (const cell of r.grid.keys()) { const [x, y] = cell.split(",").map(Number); land.add(k((x + 0.5) * CELL, (y + 0.5) * CELL)); }
+  return (la, lo) => {
+    const x = Math.floor(la * 10), y = Math.floor(lo * 10);
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) if (land.has(`${x + i},${y + j}`)) return false;
+    return true;
+  };
+}
