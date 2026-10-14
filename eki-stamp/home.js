@@ -1,11 +1,11 @@
-// 最近（最初の画面）：日曜の流れ・確認待ち・今月の距離・最近の日・GPSで記録（と近くのまだ行っていない場所）
+// 最近（最初の画面）：日曜の流れ・確認待ち・今月の距離・最近の日・GPSで記録（と近くの場所）
 import * as db from "./db.js";
 import * as geo from "./geo.js";
 import * as tl from "./timeline.js";
 import * as rd from "./roads.js";
 import { ROADCOLORS } from "./map.js";
 import { h, md, mdw, ymdw, localDay, meters, toast } from "./ui.js";
-import { S, render, go, openMapDay, waitFor, visitsOf, isSpot, needAll } from "./state.js";
+import { S, render, go, openMapDay, waitFor, loadInBackground, visitsOf, isSpot, needAll, needFind, daysVisited } from "./state.js";
 import { load, importTimeline, exportJson, confirmVisit, addVisit, ensureSpot, ensureStation, lastWeekSunday } from "./data.js";
 import { openDay } from "./mapview.js";
 import { openFind, spotItem } from "./find.js";
@@ -113,7 +113,7 @@ export async function findNear() {
     try { S.roads ||= await rd.loadRoads(); S.hwRoutes ||= await rd.loadHwRoutes(); } catch {}
     const spot = S.roads ? (rd.nearestSpot(S.roads, pos.lat, pos.lng)
       || rd.nearestSpot(S.roads, pos.lat, pos.lng, 1500, (s) => rd.KINDS[s.kind].group === "road")) : null;
-    S.near = { state: "done", pos, list: geo.nearest(m, pos.lat, pos.lng, 3), spot, fresh: nearNew(pos) };
+    S.near = { state: "done", pos, list: geo.nearest(m, pos.lat, pos.lng, 3), spot, all: nearAll(pos) };
   } catch (e) {
     const msg = e?.code === 1 ? "位置情報が許可されていません。スマホの設定で、このアプリ（Chrome）の位置情報を許可してください。"
       : e?.code === 3 ? "位置が取れませんでした（時間切れ）。空が見える場所でもう一度どうぞ。"
@@ -122,6 +122,8 @@ export async function findNear() {
     S.near = { state: "error", msg };
   }
   render();
+  // 近くの場所の「行った日数」はタイムラインから数える。計算がまだなら裏で済ませて描き直す
+  if (S.near.state === "done" && S.dayKeys.length) loadInBackground("find", needFind, () => !!S.findIdx);
 }
 
 async function stampHere(m) {
@@ -129,23 +131,26 @@ async function stampHere(m) {
   await addVisit(s, S.near.pos);
 }
 
-// 近くのまだ行っていない場所（3km以内）：駅と、SA・PA・道の駅・銭湯・温泉を近い順に。「次の一駅」（3.0.0 まで）の置き換え。
-// 図鑑にある場所と「行ってない」にした施設は出さない
-const NEAR_NEW_M = 3000;
-function nearNew(pos) {
-  const went = new Set(S.stations.filter((s) => visitsOf(s.id).length || s.rejected).flatMap((s) => [s.id, s.gid]).filter(Boolean));
+// 近くの場所（3km以内）：駅と、SA・PA・道の駅・銭湯・温泉を、行ったことのある所も含めてすべて近い順に。
+// 「次の一駅」（3.0.0 まで）の置き換え。行った所には図鑑の行った日数を添える
+const NEAR_M = 3000;
+function nearAll(pos) {
+  const zukan = (ids) => S.stations.filter((s) => ids.includes(s.id) || ids.includes(s.gid)).find((s) => visitsOf(s.id).length);
   const out = [];
-  for (const m of geo.nearest(S.master, pos.lat, pos.lng, 40)) if (m.dist <= NEAR_NEW_M && !went.has(m.id)) out.push({ kind: "駅", name: m.name, sub: m.lines, dist: m.dist, open: () => openFind(stationOf(m)) });
+  for (const m of geo.nearest(S.master, pos.lat, pos.lng, 500)) {
+    if (m.dist > NEAR_M) continue;
+    out.push({ kind: "駅", name: m.name, sub: m.lines, dist: m.dist, mine: zukan([m.id]), open: () => openFind(stationOf(m)) });
+  }
   const seen = new Set();
   for (const sp of S.roads?.spots || []) {
-    if (Math.abs(sp.lat - pos.lat) > 0.03 || Math.abs(sp.lng - pos.lng) > 0.04 || went.has(sp.id)) continue;
+    if (Math.abs(sp.lat - pos.lat) > 0.03 || Math.abs(sp.lng - pos.lng) > 0.04) continue;
     const d = geo.distance(pos.lat, pos.lng, sp.lat, sp.lng);
     const it = spotItem(sp);
-    if (d > NEAR_NEW_M || seen.has(it.key) || it.ids.some((id) => went.has(id))) continue;
+    if (d > NEAR_M || seen.has(it.key)) continue;
     seen.add(it.key);
-    out.push({ kind: rd.KINDS[sp.kind].label, name: it.name, sub: "", dist: d, open: () => openFind(it) });
+    out.push({ kind: rd.KINDS[sp.kind].label, name: it.name, sub: "", dist: d, mine: zukan(it.ids), open: () => openFind(it) });
   }
-  return out.sort((a, b) => a.dist - b.dist).slice(0, 6);
+  return out.sort((a, b) => a.dist - b.dist);
 }
 const stationOf = (m) => { const c = geo.center(m); return { kind: "station", key: m.id, gid: m.id, m, name: m.name, label: "駅", lines: m.lines, lat: c.lat, lng: c.lng }; };
 
@@ -172,14 +177,14 @@ function renderNear() {
               onclick: async (e) => { e.currentTarget.disabled = true; await stampHere(m); } })
           : h("span", { class: "muted", text: `あと${meters(m.dist - geo.STAMP_RADIUS)}` }));
     })));
-    const fresh = near.fresh || [];
+    const all = near.all || [];
     box.append(h("section", { class: "nearnew" },
-      h("h3", { text: "近くのまだ行っていない場所" }),
-      fresh.length
-        ? h("ol", { class: "nearlist" }, fresh.map((x) => h("li", {},
-            h("div", {}, h("b", { text: x.name }), h("small", { text: [x.kind, meters(x.dist), x.sub].filter(Boolean).join("・") })),
+      h("h3", { text: `近くの場所（3km以内・${all.length}か所）` }),
+      all.length
+        ? h("ol", { class: "nearlist" }, all.map((x) => h("li", { class: x.mine ? "went" : "" },
+            h("div", {}, h("b", { text: x.name }), h("small", { text: [x.kind, meters(x.dist), x.mine ? `行った・${daysVisited(x.mine).size}日` : "まだ", x.sub].filter(Boolean).join("・") })),
             h("button", { type: "button", class: "small", text: "見る", onclick: x.open }))))
-        : h("p", { class: "muted", text: "3km以内のまだ行っていない駅・施設はありません。" })));
+        : h("p", { class: "muted", text: "3km以内に駅・施設はありません。" })));
   }
   return box;
 }
@@ -224,5 +229,6 @@ export function renderHome(main) {
       h("p", { text: "Googleマップのタイムラインを読み込むと、最近の移動・初めて行った場所・路線のあしあとが自動でたまります。" }),
       h("div", { class: "btns" }, ...timelinePicker("タイムラインを読み込む", true))));
   }
-  main.append(h("details", { class: "add gps" }, h("summary", { text: "今いる場所をその場で記録する（GPS）" }), renderNear()));
+  // 現在地を探し始めたら開いたままにする（描き直すたびに閉じないように）
+  main.append(h("details", { class: "add gps", open: S.near.state !== "idle" }, h("summary", { text: "今いる場所・近くの場所（GPS）" }), renderNear()));
 }

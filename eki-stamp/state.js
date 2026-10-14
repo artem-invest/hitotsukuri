@@ -6,7 +6,7 @@ import * as tl from "./timeline.js";
 import * as rd from "./roads.js";
 import { h, localDay } from "./ui.js";
 
-export const APP_VERSION = "3.1.0";
+export const APP_VERSION = "3.1.1";
 
 export const S = {
   stations: [],
