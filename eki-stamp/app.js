@@ -11,7 +11,7 @@ import { renderReview } from "./review.js";
 import { renderLife } from "./life.js";
 import { lineStyle } from "./linestyle.js";
 
-const APP_VERSION = "2.3.2";
+const APP_VERSION = "2.3.3";
 boot("app.js開始");
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
@@ -485,8 +485,12 @@ function renderNear() {
 const visitedGids = () => new Set(stations.filter((s) => s.gid && visitsOf(s.id).length).map((s) => s.gid));
 
 // 乗った区間をタイムラインから計算する（全日分を読むので、必要になったときに1回だけ）
+// 駅データがまだなら自分で読む。以前は何もせずに戻っていたため、路線タブのまま起動すると
+// 「計算しています」→ loadRides がすぐ戻る → 描き直す → … が待ち時間なしで永久に回り、
+// 駅データの読み込みに順番が回らず画面ごと止まった（2026-10-14 本人のスマホ。2.3.3 で修正）
 async function loadRides() {
-  if (rides || !dayKeys.length || !master) return;
+  if (rides || !dayKeys.length) return;
+  master ||= await geo.loadMaster();
   allDays ||= await db.getAll("days");
   const byLine = new Map();
   const list = tl.railRides(allDays, master, geo.STAMP_RADIUS);
@@ -553,7 +557,9 @@ function renderNext() {
 function renderLines(main) {
   if (dayKeys.length && !rides) {
     main.append(h("p", { class: "empty", text: "乗った区間を計算しています…" }));
-    loadRides().then(() => { if (tab === "lines") render(); });
+    // 計算できたときだけ描き直す（できないまま描き直すと、また loadRides を呼んで回り続ける）
+    loadRides().then(() => { if (tab === "lines" && rides) render(); },
+      () => { if (tab === "lines") $("#main").replaceChildren(h("p", { class: "empty", text: "駅データを読み込めませんでした。電波のある所で開き直してください。" })); });
     return;
   }
   const lines = myLines();
