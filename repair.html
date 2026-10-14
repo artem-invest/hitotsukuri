@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>あしあと帳の修理</title>
+<style>
+/* アプリ（eki-stamp/）の外に置いた修理用のページ。サービスワーカーの管轄外なので、アプリが止まっていても開ける */
+body{margin:0;background:#f5f0e6;color:#2a2622;font:16px/1.7 "Hiragino Sans","Yu Gothic UI",Meiryo,system-ui,sans-serif;padding:24px 16px}
+main{max-width:520px;margin:0 auto}
+h1{font-size:1.4rem;margin:0 0 8px}
+button{font:inherit;font-weight:700;background:#c8432b;color:#fff;border:0;border-radius:10px;padding:12px 18px;width:100%;margin:8px 0}
+button:disabled{opacity:.6}
+.box{background:#fffdf8;border:1px solid #ddd3c2;border-radius:12px;padding:12px 14px;margin:12px 0}
+.muted{color:#7b7266;font-size:.85rem}
+a{color:#c8432b;font-weight:700}
+li{margin:2px 0}
+</style>
+</head>
+<body>
+<main>
+  <h1>あしあと帳の修理</h1>
+  <p>アプリが「読み込んでいます…」のまま動かないときに使います。スマホにしまってあるアプリの本体だけを捨てて、最新の版を取り直します。<b>記録（行った駅・道のり・名前を付けた場所）は消しません。</b></p>
+  <button id="fix" type="button">修理する</button>
+  <div class="box"><b>結果</b><ul id="log"><li class="muted">まだ何もしていません</li></ul></div>
+  <p><a href="eki-stamp/">あしあと帳を開く</a></p>
+  <p class="muted">修理のあとは、ホーム画面のアプリを一度完全に閉じてから開いてください。</p>
+</main>
+<script>
+const log = (t) => { const ul = document.getElementById("log"); if (ul.querySelector(".muted")) ul.innerHTML = ""; const li = document.createElement("li"); li.textContent = t; ul.appendChild(li); };
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, ng) => setTimeout(() => ng(new Error("応答なし")), ms))]);
+
+// 記録が読めるか（データベースを開いて件数を数えるだけ。書き換えない）
+function checkDb() {
+  return new Promise((ok, ng) => {
+    const req = indexedDB.open("eki-stamp"); // 版を指定しない＝今の版のまま開く（作り直さない）
+    req.onerror = () => ng(req.error);
+    req.onblocked = () => ng(new Error("ほかの画面が使用中"));
+    req.onsuccess = () => {
+      const db = req.result;
+      const names = ["stations", "visits", "days"].filter((n) => db.objectStoreNames.contains(n));
+      const tx = db.transaction(names, "readonly");
+      const out = {};
+      names.forEach((n) => { const c = tx.objectStore(n).count(); c.onsuccess = () => (out[n] = c.result); });
+      tx.oncomplete = () => { db.close(); ok({ version: db.version, ...out }); };
+      tx.onerror = () => ng(tx.error);
+    };
+  });
+}
+
+document.getElementById("fix").onclick = async (e) => {
+  e.target.disabled = true;
+  e.target.textContent = "修理しています…";
+  try {
+    const regs = navigator.serviceWorker ? await navigator.serviceWorker.getRegistrations() : [];
+    for (const r of regs) await r.unregister();
+    log(`しまってあった仕組み（サービスワーカー）を外しました：${regs.length}件`);
+  } catch (err) { log("サービスワーカーを外せませんでした：" + err.message); }
+  try {
+    const keys = window.caches ? await caches.keys() : [];
+    for (const k of keys) await caches.delete(k);
+    log(`しまってあったアプリの本体を捨てました：${keys.join("・") || "なし"}`);
+  } catch (err) { log("アプリの本体を捨てられませんでした：" + err.message); }
+  try {
+    const r = await withTimeout(checkDb(), 8000);
+    log(`記録は無事です：駅・施設 ${r.stations ?? "?"}・記録 ${r.visits ?? "?"}・道のり ${r.days ?? "?"}日（データベースの版 ${r.version}）`);
+  } catch (err) { log("記録の確認：" + err.message + "（記録そのものは消していません）"); }
+  e.target.textContent = "修理しました";
+};
+</script>
+</body>
+</html>
