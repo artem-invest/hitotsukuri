@@ -26,7 +26,7 @@ hitotsukuri/            ← このリポジトリ（GitHub: hitotsukuri / public
 │   ├─ map.js           1日の道のりを地図に描く（Leaflet＋地理院タイル）
 │   ├─ roads.js         SA・PA・道の駅の立ち寄り判定、車の距離を高速／一般道に分ける
 │   ├─ roads.json       SA・PA・道の駅・銭湯・温泉（約6,600か所）と高速道路の線（tools/build_roads.py で生成）
-│   ├─ hwroutes.json    高速道路ごとの SA・PA の並び（tools/build_hwroutes.py で roads.json から生成。roads.json を作り直したら回す）
+│   ├─ hwroutes.json    高速道路ごとの SA・PA の並びと、都道府県ごとの道の駅（tools/build_hwroutes.py で roads.json から生成。roads.json を作り直したら回す）
 │   ├─ ui.js            画面づくりの小道具（h()・日付の書式・toast）
 │   ├─ review.js        年報（年ごと・月ごとの振り返り）
 │   ├─ life.js          家探し（よく行く場所・候補の駅ごとの移動時間の目安）
@@ -40,7 +40,7 @@ hitotsukuri/            ← このリポジトリ（GitHub: hitotsukuri / public
 ├─ ic-quiz/             高速道路IC当てクイズ（HTML1枚）
 ├─ takibi-timer/        焚き火タイマー（HTML1枚）
 ├─ sashimi-calendar/    旬の魚図鑑（HTML1枚。刺身の旬カレンダー）
-└─ tools/              make_icons.py（アイコン）・build_stations.py（駅）・build_roads.py（SA・PA・銭湯・高速）・build_hwroutes.py（高速ごとのSA・PAの並び）・build_munis.py（市区町村名）
+└─ tools/              make_icons.py（アイコン）・build_stations.py（駅）・build_roads.py（SA・PA・銭湯・高速）・build_hwroutes.py（高速ごとのSA・PA・県ごとの道の駅）・fetch_michi_pref.py（道の駅の市区町村。結果は michi_muni.json に貯める）・build_munis.py（市区町村名）
 ```
 - 作品は**1作品1フォルダ、本体は index.html**。新作はフォルダを足してトップの index.html にカードを1枚足す
 - 場所は `claude_work/hitotsukuri`。claude_work（投資システム）の git とは**別のリポジトリ**で、claude_work 側の .gitignore で除外している
@@ -107,6 +107,9 @@ hitotsukuri/            ← このリポジトリ（GitHub: hitotsukuri / public
 - **高速道路**（2.5.0）：路線タブの「電車／高速道路」切り替え。SA・PA を一番近い高速の線（600m以内）に割り当て、上り・下りなど同じ名前（3km以内）は1か所にまとめ、東京に近い端から一筆書きの順に並べる。
   法令名（第一東海自動車道など）は呼び名と記号（東名高速 E1）に直す（`COMMON`）。中央道は高井戸〜大月が法令上「富士吉田線」なので中央道にまとめ、小牧より西は名神に分ける（`SPLIT`）。首都高などは「首都高 4号新宿線」。
   立ち寄った＝図鑑にある（上り・下りどちらか）。通った＝車の道のりで高速と判定した区間（点と点を結んだ線）から1.5km以内（`hwPasses`。点がまばらなので広め・そばを走っただけでも入る）。保存せず開くたびに計算
+- **道の駅**（2.6.0・本人と決定）：一般道沿いで「1本の道の順番」が作れないので、都道府県ごとの塗り絵にした（実際のスタンプラリーも地方・県単位）。路線タブの3つ目の切り替え。
+  立ち寄った県を上に、ほかは「地方ごと」にたたむ。県の中は近い順（一筆書き）。どの県かは国土地理院の逆ジオコーダの市区町村コードの上2桁（`tools/fetch_michi_pref.py` が1回だけ調べて `tools/michi_muni.json` に貯める）。
+  道の駅は OSM 由来で約1,000か所（実際は約1,230）。「通った」は出さない（一般道の点はまばらで当てにならない）
 - **行ったことある？**（2.5.0）：図鑑の上の検索。駅（全国）・SA・PA・道の駅・銭湯を名前で探し、タイムラインの全期間から「乗り降り／電車で通過／近くに立ち寄り／高速で通過」した日を出す（`loadFind`・保存しない）。
   日付をタップでその日のルート（その場所に印）。図鑑に無ければ日付ごとの「行った」で図鑑に入れる（その日の12時・how:timeline。以前「行ってない」にした施設も戻せる）
 - **日曜日の案内**（2.5.0）：直近の日曜0時より後にタイムラインを読み込んでいなければ「最近」の一番上に案内（日曜に読めなければ土曜まで出したまま）。「今週はしない」でその週は消す（meta `timelineSkip`＝その週の日曜の日付）。通知はサーバーが要るので使っていない

@@ -144,16 +144,22 @@ export function spotStops(r, days) {
   return out;
 }
 
-// 高速道路ごとの SA・PA の並び（hwroutes.json。tools/build_hwroutes.py で roads.json から作る）
+// 高速道路ごとの SA・PA の並びと、都道府県ごとの道の駅（hwroutes.json。tools/build_hwroutes.py で roads.json から作る）
 // routes: [{legal: 法令名, name: 呼び名, sym: 記号, places: [{name, ids: [spot id（上り・下りなど）]}]}]
+// michi: [{pref: 都道府県, region: 地方, items: [{name, id}]}]
 let hwLoading = null;
-export function loadHwRoutes() {
+function loadHwData() {
   hwLoading ||= fetch("./hwroutes.json")
     .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
-    .then((d) => d.routes.map(([legal, name, sym, places]) => ({ legal, name, sym, places: places.map(([n, ids]) => ({ name: n, ids })) })))
+    .then((d) => ({
+      routes: d.routes.map(([legal, name, sym, places]) => ({ legal, name, sym, places: places.map(([n, ids]) => ({ name: n, ids })) })),
+      michi: (d.michi || []).map(([pref, region, items]) => ({ pref, region, items: items.map(([name, id]) => ({ name, id })) })),
+    }))
     .catch((e) => { hwLoading = null; throw e; });
   return hwLoading;
 }
+export const loadHwRoutes = () => loadHwData().then((d) => d.routes);
+export const loadMichi = () => loadHwData().then((d) => d.michi);
 
 const PASS_M = 1500; // 高速を走った区間（点と点を結んだ線）からこの距離[m]以内の SA・PA を「通った」とする（点がまばらなので広め）
 // 車で高速を走った日に、そばを通った SA・PA → Map(場所のキー＝ids[0] → Set(日付))

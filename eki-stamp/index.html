@@ -258,6 +258,12 @@ details.hw .route li{cursor:pointer}
 .found small{flex:1 1 auto;color:var(--muted);font-size:.75rem}
 .weekly{border-color:var(--accent)}
 .weekly h2{font-size:1rem}
+/* 2.6.0：道の駅（都道府県ごと） */
+details.michi summary{grid-template-columns:1fr auto}
+details.michi .bar{grid-column:1/-1}
+.chips{list-style:none;margin:10px 0 2px;padding:0;display:flex;flex-wrap:wrap;gap:6px}
+.chips button{border:1.5px dashed var(--empty);background:none;border-radius:999px;padding:3px 10px;font-size:.8rem;color:var(--muted)}
+.chips button.on{border:1.5px solid var(--lc);background:var(--lc);color:#fff;font-weight:700}
 </style>
 </head>
 <body>

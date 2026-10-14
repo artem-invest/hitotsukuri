@@ -10,7 +10,7 @@ import { renderReview } from "./review.js";
 import { renderLife } from "./life.js";
 import { lineStyle } from "./linestyle.js";
 
-const APP_VERSION = "2.5.0";
+const APP_VERSION = "2.6.0";
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
 // 朝刊の駅スタンプ帳から引き継いだ駅（2.4.0 で本人の希望により外した）。記録が残っていれば起動時に1回だけ消す
@@ -40,8 +40,9 @@ let reviewYear = null;        // 年報で見ている年
 let life = { places: [], candidates: [] }; // 家探し：場所の名前・大事さ・候補の駅（meta "life"）
 let hwRoutes = null;          // 高速道路ごとの SA・PA の並び（rd.loadHwRoutes）
 let hwPass = null;            // 高速で通った SA・PA → 日付（rd.hwPasses）。タイムラインから計算
+let michiPrefs = null;        // 都道府県ごとの道の駅（rd.loadMichi）
 let findIdx = null;           // さがす：駅・施設ごとに、タイムラインで乗り降り・立ち寄り・通った日
-let linesMode = "train";      // 路線タブ：train（電車）／ hw（高速）
+let linesMode = "train";      // 路線タブ：train（電車）／ hw（高速）／ michi（道の駅）
 try { linesMode = localStorage.getItem("eki.linesMode") || "train"; } catch {}
 let rides = null;             // 乗った区間 {byLine: Map(路線番号 → Set(駅ID)), count}。タイムラインから計算
 try { tab = localStorage.getItem("eki.tab") || "home"; } catch {}
@@ -598,6 +599,54 @@ function renderHighways(main) {
   main.append(h("p", { class: "hint", text: "高速をタップすると、東京に近い側から SA・PA が並びます。名前をタップすると、行った日・通った日とその日のルートが見られます。「通った」はタイムラインの車の道のりからの推定です（点がまばらなので、そばを走っただけでも入ることがあります）。上り・下りは1か所にまとめています。" }));
 }
 
+/* ---------- 道の駅（都道府県ごとの塗り絵） ---------- */
+async function loadMichiTab() {
+  roads ||= await rd.loadRoads();
+  hwRoutes ||= await rd.loadHwRoutes();
+  michiPrefs ||= await rd.loadMichi();
+}
+
+function michiCard(p) {
+  const on = p.items.filter((it) => visitsOf(it.id).length).length;
+  const pct = Math.round((on / p.items.length) * 1000) / 10;
+  return h("details", { class: "line michi" + (on === p.items.length ? " full" : ""), style: `--lc:${rd.KINDS.michi.color}` },
+    h("summary", {},
+      h("span", { class: "ln", text: p.pref }),
+      h("span", { class: "cnt", text: on === p.items.length ? "制覇！" : `${on}/${p.items.length}` }),
+      h("span", { class: "bar" }, h("i", { style: `width:${pct}%` }))),
+    h("ul", { class: "chips" }, p.items.map((it) => h("li", {},
+      h("button", { type: "button", class: visitsOf(it.id).length ? "on" : "", text: it.name, onclick: () => openFind(spotItem(roads.byId[it.id])) })))));
+}
+
+function renderMichi(main) {
+  if (!michiPrefs || !roads || !hwRoutes) {
+    const msg = h("p", { class: "empty", text: "道の駅を読み込んでいます…" });
+    main.append(msg);
+    // 読めたときだけ描き直す（読めないまま描き直すと回り続ける）
+    loadMichiTab().then(() => { if (tab === "lines" && linesMode === "michi" && michiPrefs) render(); },
+      () => { msg.textContent = "道の駅のデータを読み込めませんでした。電波のある所で開き直してください。"; });
+    return;
+  }
+  const went = (p) => p.items.some((it) => visitsOf(it.id).length);
+  const mine = michiPrefs.filter(went);
+  const total = michiPrefs.reduce((n, p) => n + p.items.filter((it) => visitsOf(it.id).length).length, 0);
+  main.append(h("p", { class: "linesum" }, h("b", { text: `道の駅 ${total}か所` }), ` に立ち寄り・${mine.length}都道府県`));
+  if (mine.length) for (const p of mine) main.append(michiCard(p));
+  else main.append(h("p", { class: "empty", text: "立ち寄った道の駅がある都道府県がここに並びます。" }));
+  // ほかの都道府県は地方ごとにたたんでおく
+  const rest = h("details", { class: "add" }, h("summary", { text: "ほかの都道府県（地方ごと）" }));
+  rest.addEventListener("toggle", () => {
+    if (!rest.open || rest.children.length > 1) return;
+    let region = null;
+    for (const p of michiPrefs.filter((x) => !went(x))) {
+      if (p.region !== region) { region = p.region; rest.append(h("h3", { class: "gridhead", text: region })); }
+      rest.append(michiCard(p));
+    }
+  });
+  main.append(rest);
+  main.append(h("p", { class: "hint", text: "県をタップすると、その県の道の駅が近い順に並びます（色つき＝図鑑にある）。名前をタップすると、行った日・近くに立ち寄った日とその日のルートが見られます。道の駅の位置は OpenStreetMap から取っていて、実際の数（全国約1,230）より少し欠けています。" }));
+}
+
 /* ---------- さがす：駅や施設に行ったことがあるかを、タイムラインまでさかのぼって調べる ---------- */
 const placeOf = (id) => hwRoutes?.flatMap((r) => r.places).find((p) => p.ids.includes(id)) || null;
 
@@ -723,8 +772,9 @@ async function addFound(it, date) {
 function renderLines(main) {
   const mode = (m, label) => h("button", { type: "button", "aria-pressed": String(linesMode === m), text: label,
     onclick: () => { linesMode = m; try { localStorage.setItem("eki.linesMode", m); } catch {} render(); } });
-  main.append(h("div", { class: "seg" }, mode("train", "電車"), mode("hw", "高速道路")));
+  main.append(h("div", { class: "seg" }, mode("train", "電車"), mode("hw", "高速道路"), mode("michi", "道の駅")));
   if (linesMode === "hw") { renderHighways(main); return; }
+  if (linesMode === "michi") { renderMichi(main); return; }
   if (dayKeys.length && !rides) {
     main.append(h("p", { class: "empty", text: "乗った区間を計算しています…" }));
     // 計算できたときだけ描き直す（できないまま描き直すと、また loadRides を呼んで回り続ける）

@@ -7,7 +7,10 @@
 - 並び順は駅と同じ一筆書き（端から最近傍 → 2-optで交差をほどく）。支線のある道路は前後することがある
 - 高速道路の名前は法令上の名前（例：第一東海自動車道）なので、ふだんの呼び名と記号（E1 など）を添える
 
-出力: {"routes": [[法令名（複数は・でつなぐ）, 呼び名, 記号, [[名前, [spot id, ...]], ...]], ...]}
+道の駅は都道府県ごとにまとめる（どの県かは tools/fetch_michi_pref.py が国土地理院の住所検索で調べた michi_muni.json）
+
+出力: {"routes": [[法令名（複数は・でつなぐ）, 呼び名, 記号, [[名前, [spot id, ...]], ...]], ...],
+       "michi": [[都道府県, 地方, [[名前, spot id], ...]], ...]}
 """
 import json
 import math
@@ -137,6 +140,43 @@ def order(ids, pos):
     return path
 
 
+PREFS = ["北海道", "青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県", "茨城県", "栃木県", "群馬県", "埼玉県", "千葉県",
+         "東京都", "神奈川県", "新潟県", "富山県", "石川県", "福井県", "山梨県", "長野県", "岐阜県", "静岡県", "愛知県", "三重県",
+         "滋賀県", "京都府", "大阪府", "兵庫県", "奈良県", "和歌山県", "鳥取県", "島根県", "岡山県", "広島県", "山口県", "徳島県",
+         "香川県", "愛媛県", "高知県", "福岡県", "佐賀県", "長崎県", "熊本県", "大分県", "宮崎県", "鹿児島県", "沖縄県"]
+REGIONS = [(1, "北海道"), (7, "東北"), (14, "関東"), (23, "中部"), (30, "近畿"), (35, "中国"), (39, "四国"), (47, "九州・沖縄")]
+
+
+def region(code):
+    return next(name for last, name in REGIONS if code <= last)
+
+
+def michi_by_pref(spots):
+    """道の駅を都道府県ごとに。同じ名前で1km以内のもの（OSMで点と面の二重など）は1つにする"""
+    muni_path = Path(__file__).resolve().parent / "michi_muni.json"
+    muni = json.loads(muni_path.read_text(encoding="utf-8")) if muni_path.exists() else {}
+    by, pos, missing = defaultdict(list), {}, 0
+    for sid, name, kind, la, lo in spots:
+        if kind != "michi":
+            continue
+        code = muni.get(sid)
+        if not code:
+            missing += 1
+            continue
+        pref = int(code) // 1000
+        if any(name == n2 and dist(la, lo, *pos[i2]) <= 1000 for n2, i2 in by[pref]):
+            continue
+        by[pref].append((name, sid))
+        pos[sid] = (la, lo)
+    out = []
+    for code in sorted(by):
+        names = dict((sid, n) for n, sid in by[code])
+        ids = order([sid for _, sid in by[code]], pos)
+        out.append([PREFS[code - 1], region(code), [[names[i].removeprefix("道の駅").strip(), i] for i in ids]])
+    print(f"道の駅 {sum(len(x[2]) for x in out)}か所・{len(out)}都道府県（県が分からない {missing}）")
+    return out
+
+
 def main():
     r = json.loads((ROOT / "roads.json").read_text(encoding="utf-8"))
     grid = defaultdict(list)
@@ -197,7 +237,8 @@ def main():
         routes.append(["・".join(g["legal"]), common, g["sym"], [[places[i]["name"], places[i]["ids"]] for i in order(g["idx"], pos)]])
     routes.sort(key=lambda x: -len(x[3]))
     out = ROOT / "hwroutes.json"
-    out.write_text(json.dumps({"routes": routes}, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    michi = michi_by_pref(r["spots"])
+    out.write_text(json.dumps({"routes": routes, "michi": michi}, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"SA・PA {len(places)}か所（高速に結びつかない {lost}）→ 高速 {len(routes)}本・{out.stat().st_size // 1024}KB")
     for name, common, sym, ps in routes:
         if common in ("東名高速", "中央道", "名神高速", "関越道", "東北道", "圏央道"):
