@@ -11,7 +11,7 @@ import { renderReview } from "./review.js";
 import { renderLife } from "./life.js";
 import { lineStyle } from "./linestyle.js";
 
-const APP_VERSION = "2.2.3";
+const APP_VERSION = "2.3.0";
 boot("app.js開始");
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
