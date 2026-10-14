@@ -6,7 +6,7 @@ import * as tl from "./timeline.js";
 import * as rd from "./roads.js";
 import { h, localDay } from "./ui.js";
 
-export const APP_VERSION = "3.0.0";
+export const APP_VERSION = "3.1.0";
 
 export const S = {
   stations: [],
@@ -14,7 +14,7 @@ export const S = {
   pending: [],          // 確認待ちの記録（本人が「行った」と言うまで図鑑に入れない）
   meta: { lastExport: null, lastTimeline: null, tlSkip: null, persisted: "?", modeFix: {} },
   tab: "home",          // 下のタブ：home / zukan / lines / map / more
-  more: "review",       // その他の中：review（年報）/ life（家探し）/ backup（設定）
+  more: "review",       // その他の中：review（年報）/ backup（設定）。家探しは 3.1.0 で外した
   linesMode: "train",   // 路線タブ：train（電車）／ hw（高速）／ michi（道の駅）
   reviewYear: null,     // 年報で見ている年
   reviewMode: "all",    // 年報の月ごとで見る移動手段
@@ -29,16 +29,16 @@ export const S = {
   hwPass: null,         // 高速で通った SA・PA → 日付
   findIdx: null,        // 駅・施設ごとに、タイムラインで見つかった日と何をしたか
   mapDate: null,        // 地図で見ている日
-  life: { places: [], candidates: [] }, // 家探し（meta "life"）
 };
 
 const saved = (k, d) => { try { return localStorage.getItem(k) || d; } catch { return d; } };
 export const remember = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 S.linesMode = saved("eki.linesMode", "train");
 S.more = saved("eki.more", "review");
+if (S.more === "life") S.more = "review"; // 3.1.0 で家探しを外した
 S.tab = saved("eki.tab", "home");
 // 3.0.0 で「年報・家探し・設定」を「その他」にまとめた。それより前の保存値を読み替える
-if (["review", "life", "backup"].includes(S.tab)) { S.more = S.tab; S.tab = "more"; }
+if (["review", "life", "backup"].includes(S.tab)) { S.more = S.tab === "backup" ? "backup" : "review"; S.tab = "more"; }
 S.tab = { stamps: "home", log: "more" }[S.tab] || S.tab;
 if (!["home", "zukan", "lines", "map", "more"].includes(S.tab)) S.tab = "home";
 

@@ -1,4 +1,4 @@
-// その他：年報・家探し・設定（バックアップ・記録の点検・この端末の状態）
+// その他：年報・設定（バックアップ・記録の点検・この端末の状態）
 import * as db from "./db.js";
 import * as tl from "./timeline.js";
 import * as rd from "./roads.js";
@@ -6,26 +6,19 @@ import { h, ymd, ymdw, mdw } from "./ui.js";
 import { S, APP_VERSION, render, remember, openMapDay, waitFor, isSpot, needAll } from "./state.js";
 import { exportJson, importJson, setMode, fixOf } from "./data.js";
 import { renderReview } from "./review.js";
-import { renderLife } from "./life.js";
 import { timelinePicker } from "./home.js";
 import { openDay } from "./mapview.js";
 
 export function renderMore(main) {
   const sub = (m, label) => h("button", { type: "button", "aria-pressed": String(S.more === m), text: label,
     onclick: () => { S.more = m; remember("eki.more", m); render(); } });
-  main.append(h("div", { class: "seg" }, sub("review", "年報"), sub("life", "家探し"), sub("backup", "設定")));
+  main.append(h("div", { class: "seg" }, sub("review", "年報"), sub("backup", "設定")));
   if (S.more === "backup") { renderSettings(main); return; }
   if (S.dayKeys.length && !S.allDays) {
     waitFor(main, "all", "記録を集計しています…", needAll, () => !!S.allDays);
     return;
   }
   const days = S.allDays || [];
-  if (S.more === "life") {
-    const span = days.length ? new Set(days.map((d) => d.date.slice(0, 7))).size : 1;
-    renderLife(main, { allDays: days, master: S.master, life: S.life, monthsSpan: span,
-      save: async (next) => { S.life = next; await db.setMeta("life", next); render(); } });
-    return;
-  }
   renderReview(main, { allDays: days, stations: S.stations, visits: S.visits, roads: S.roads, master: S.master,
     year: S.reviewYear, setYear: (y) => { S.reviewYear = y; render(); },
     mode: S.reviewMode, setMode: (m) => { S.reviewMode = m; render(); },
@@ -169,7 +162,7 @@ function renderSettings(main) {
         h("li", { text: `通信：${navigator.onLine ? "オンライン" : "オフライン（記録はできます）"}` }),
         h("li", { text: `起動のしかた：${matchMedia("(display-mode: standalone)").matches || navigator.standalone ? "ホーム画面のアプリ" : "ブラウザ"}` }),
         h("li", { text: `版：${APP_VERSION}` })),
-      h("p", { class: "muted", text: "駅の位置：国土数値情報（鉄道データ N02-24）（国土交通省）を加工して作成。高速道路：国土数値情報（高速道路時系列データ N06-24）（国土交通省）を加工して作成。SA・PA・道の駅・銭湯・温泉と、高速ごとのSA・PAの並び・都道府県ごとの道の駅：© OpenStreetMap contributors（ODbL）を加工して作成。道の駅の都道府県と町名：国土地理院 逆ジオコーダ。地図：地理院タイル" })),
+      h("p", { class: "muted", text: "駅の位置：国土数値情報（鉄道データ N02-24）（国土交通省）を加工して作成。高速道路：国土数値情報（高速道路時系列データ N06-24）（国土交通省）を加工して作成。SA・PA・道の駅・銭湯・温泉と、高速ごとのSA・PAの並び・都道府県ごとの道の駅：© OpenStreetMap contributors（ODbL）を加工して作成。道の駅の都道府県：国土地理院 逆ジオコーダ。陸地：Natural Earth。地図：地理院タイル" })),
     h("section", { class: "card" },
       h("h2", { text: "ホーム画面に追加" }),
       h("p", { text: "Android：Chromeのメニュー →「ホーム画面に追加」→「インストール」。iPhone：Safariの共有ボタン →「ホーム画面に追加」。" })),

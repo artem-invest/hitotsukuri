@@ -15,7 +15,6 @@ export async function load() {
   for (const k of ["lastExport", "lastTimeline"]) S.meta[k] = await db.getMeta(k);
   S.meta.tlSkip = await db.getMeta("timelineSkip");
   S.meta.modeFix = (await db.getMeta("modeFix")) || {};
-  S.life = (await db.getMeta("life")) || { places: [], candidates: [] };
   S.dayKeys = (await db.getAllKeys("days")).sort();
   S.allDays = null;
   forgetCalc();
@@ -318,13 +317,13 @@ async function recheckStations() {
 }
 
 /* ---------- バックアップ（JSONの書き出し・読み込み） ---------- */
-// 3.0.0 から道のり（days）・家探し・移動手段の手直しも入れる（format 2）。
+// 3.0.0 から道のり（days）・移動手段の手直しも入れる（format 2）。家探し（meta "life"）は 3.1.0 で画面ごと外した（スマホの記録は消していない）。
 // Googleのタイムラインは今はスマホの中にしか無いので、スマホを失くすと元の記録ごと消える。だから道のりも外に残す
 export async function exportJson() {
   const days = await needDays().catch(() => []);
   const data = { app: "eki-stamp", format: 2, exportedAt: new Date().toISOString(),
     stations: S.stations, visits: [...S.visits, ...S.pending], days,
-    meta: { life: S.life, modeFix: S.meta.modeFix } };
+    meta: { modeFix: S.meta.modeFix } };
   const name = `ashiato-${today()}.json`;
   const file = new File([JSON.stringify(data)], name, { type: "application/json" });
   let shared = false;
@@ -357,11 +356,10 @@ export async function importJson(file) {
   const newV = okV.filter((v) => !S.visits.some((x) => x.id === v.id) && !S.pending.some((x) => x.id === v.id)).length;
   // 足し合わせる（今ある記録は消さない）。同じIDは同じ記録なので上書きしても中身は同じ
   await db.putMany([...okS.map((s) => ["stations", s]), ...okV.map((v) => ["visits", v])]);
-  // 道のり：同じ日は詳しいほうを残す。手直し・家探しは、今のスマホに無いものだけ足す
+  // 道のり：同じ日は詳しいほうを残す。手直しは、今のスマホに無いものだけ足す
   const days = Array.isArray(data.days) ? data.days.filter((d) => d && /^\d{4}-\d\d-\d\d$/.test(d.date) && Array.isArray(d.acts) && Array.isArray(d.pts)) : [];
   const { added } = days.length ? await mergeDays(days) : { added: 0 };
   if (data.meta?.modeFix) await db.setMeta("modeFix", { ...data.meta.modeFix, ...S.meta.modeFix });
-  if (data.meta?.life && !S.life.places.length && !S.life.candidates.length) await db.setMeta("life", data.meta.life);
   await load();
   toast(`読み込みました（新しい場所 ${newS}・記録 ${newV}・道のり ${added}日）`);
 }

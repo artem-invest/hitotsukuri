@@ -1,4 +1,4 @@
-// 最近（最初の画面）：日曜の流れ・確認待ち・今月の距離・最近の日・次の一駅・GPSで記録
+// 最近（最初の画面）：日曜の流れ・確認待ち・今月の距離・最近の日・GPSで記録（と近くのまだ行っていない場所）
 import * as db from "./db.js";
 import * as geo from "./geo.js";
 import * as tl from "./timeline.js";
@@ -8,7 +8,7 @@ import { h, md, mdw, ymdw, localDay, meters, toast } from "./ui.js";
 import { S, render, go, openMapDay, waitFor, visitsOf, isSpot, needAll } from "./state.js";
 import { load, importTimeline, exportJson, confirmVisit, addVisit, ensureSpot, ensureStation, lastWeekSunday } from "./data.js";
 import { openDay } from "./mapview.js";
-import { myLines, visitedGids } from "./lines.js";
+import { openFind, spotItem } from "./find.js";
 
 // タイムラインのファイルを選ぶボタン（どの画面からも使う）
 export function timelinePicker(label, primary = false) {
@@ -101,44 +101,6 @@ export function renderConfirm() {
     S.pending.length >= 5 ? h("div", { class: "btns" }, all) : null);
 }
 
-/* ---------- 次の一駅 ---------- */
-// 自分の路線のまだの駅を、今いる所（無ければ最後に行った駅）から近い順に
-function nextStations(n = 3) {
-  const lines = myLines();
-  if (!lines.length) return { from: null, list: [] };
-  let from = S.near.state === "done" ? { lat: S.near.pos.lat, lng: S.near.pos.lng, label: "今いる所" } : null;
-  if (!from) {
-    const last = [...S.visits].sort((a, b) => b.at.localeCompare(a.at)).map((v) => S.stations.find((s) => s.id === v.stationId)).find((s) => s?.lat != null && !isSpot(s));
-    if (last) from = { lat: last.lat, lng: last.lng, label: `最後に行った${last.name}` };
-  }
-  if (!from) return { from: null, list: [] };
-  const got = visitedGids();
-  const seen = new Map();
-  for (const l of lines) {
-    for (const id of l.ids) {
-      if (got.has(id)) continue;
-      const m = S.master.byId[id];
-      const d = Math.min(...m.pts.map((p) => geo.distance(from.lat, from.lng, p[1], p[0])));
-      const cur = seen.get(id);
-      // 同じ駅が複数の路線にあるときは、残りの少ない（制覇に近い）路線で紹介する
-      if (!cur || l.left < cur.line.left) seen.set(id, { m, d, line: l, via: l.rode.has(id) || cur?.via });
-    }
-  }
-  return { from, list: [...seen.values()].sort((a, b) => a.d - b.d).slice(0, n) };
-}
-
-function renderNext() {
-  if (!S.master) return null;
-  const { from, list } = nextStations();
-  if (!list.length) return null;
-  return h("section", { class: "next" },
-    h("h2", { text: "次の一駅" }),
-    h("p", { class: "muted", text: `${from.label}から近い、あなたの路線のまだ降りていない駅` }),
-    h("ol", { class: "nearlist" }, list.map(({ m, d, line, via }) => h("li", {},
-      h("div", {}, h("b", { text: m.name }), h("small", { text: `${line.name} あと${line.left}駅で制覇・${meters(d)}${via ? "・通ったことはある" : ""}` })),
-      h("a", { class: "maplink", href: `https://www.google.com/maps/search/?api=1&query=${geo.center(m).lat},${geo.center(m).lng}`, target: "_blank", rel: "noopener", text: "地図" })))));
-}
-
 /* ---------- GPSでその場で記録 ---------- */
 const stampedToday = (s) => !!s && visitsOf(s.id).some((v) => new Date(v.at).toDateString() === new Date().toDateString());
 
@@ -148,10 +110,10 @@ export async function findNear() {
   try {
     const [m, pos] = await Promise.all([geo.loadMaster(), geo.locate()]);
     S.master = m;
-    try { S.roads ||= await rd.loadRoads(); } catch {}
+    try { S.roads ||= await rd.loadRoads(); S.hwRoutes ||= await rd.loadHwRoutes(); } catch {}
     const spot = S.roads ? (rd.nearestSpot(S.roads, pos.lat, pos.lng)
       || rd.nearestSpot(S.roads, pos.lat, pos.lng, 1500, (s) => rd.KINDS[s.kind].group === "road")) : null;
-    S.near = { state: "done", pos, list: geo.nearest(m, pos.lat, pos.lng, 3), spot };
+    S.near = { state: "done", pos, list: geo.nearest(m, pos.lat, pos.lng, 3), spot, fresh: nearNew(pos) };
   } catch (e) {
     const msg = e?.code === 1 ? "位置情報が許可されていません。スマホの設定で、このアプリ（Chrome）の位置情報を許可してください。"
       : e?.code === 3 ? "位置が取れませんでした（時間切れ）。空が見える場所でもう一度どうぞ。"
@@ -166,6 +128,26 @@ async function stampHere(m) {
   const s = rd.KINDS[m.kind] ? await ensureSpot(m) : await ensureStation(m);
   await addVisit(s, S.near.pos);
 }
+
+// 近くのまだ行っていない場所（3km以内）：駅と、SA・PA・道の駅・銭湯・温泉を近い順に。「次の一駅」（3.0.0 まで）の置き換え。
+// 図鑑にある場所と「行ってない」にした施設は出さない
+const NEAR_NEW_M = 3000;
+function nearNew(pos) {
+  const went = new Set(S.stations.filter((s) => visitsOf(s.id).length || s.rejected).flatMap((s) => [s.id, s.gid]).filter(Boolean));
+  const out = [];
+  for (const m of geo.nearest(S.master, pos.lat, pos.lng, 40)) if (m.dist <= NEAR_NEW_M && !went.has(m.id)) out.push({ kind: "駅", name: m.name, sub: m.lines, dist: m.dist, open: () => openFind(stationOf(m)) });
+  const seen = new Set();
+  for (const sp of S.roads?.spots || []) {
+    if (Math.abs(sp.lat - pos.lat) > 0.03 || Math.abs(sp.lng - pos.lng) > 0.04 || went.has(sp.id)) continue;
+    const d = geo.distance(pos.lat, pos.lng, sp.lat, sp.lng);
+    const it = spotItem(sp);
+    if (d > NEAR_NEW_M || seen.has(it.key) || it.ids.some((id) => went.has(id))) continue;
+    seen.add(it.key);
+    out.push({ kind: rd.KINDS[sp.kind].label, name: it.name, sub: "", dist: d, open: () => openFind(it) });
+  }
+  return out.sort((a, b) => a.dist - b.dist).slice(0, 6);
+}
+const stationOf = (m) => { const c = geo.center(m); return { kind: "station", key: m.id, gid: m.id, m, name: m.name, label: "駅", lines: m.lines, lat: c.lat, lng: c.lng }; };
 
 function renderNear() {
   const { near } = S;
@@ -190,6 +172,14 @@ function renderNear() {
               onclick: async (e) => { e.currentTarget.disabled = true; await stampHere(m); } })
           : h("span", { class: "muted", text: `あと${meters(m.dist - geo.STAMP_RADIUS)}` }));
     })));
+    const fresh = near.fresh || [];
+    box.append(h("section", { class: "nearnew" },
+      h("h3", { text: "近くのまだ行っていない場所" }),
+      fresh.length
+        ? h("ol", { class: "nearlist" }, fresh.map((x) => h("li", {},
+            h("div", {}, h("b", { text: x.name }), h("small", { text: [x.kind, meters(x.dist), x.sub].filter(Boolean).join("・") })),
+            h("button", { type: "button", class: "small", text: "見る", onclick: x.open }))))
+        : h("p", { class: "muted", text: "3km以内のまだ行っていない駅・施設はありません。" })));
   }
   return box;
 }
@@ -234,6 +224,5 @@ export function renderHome(main) {
       h("p", { text: "Googleマップのタイムラインを読み込むと、最近の移動・初めて行った場所・路線のあしあとが自動でたまります。" }),
       h("div", { class: "btns" }, ...timelinePicker("タイムラインを読み込む", true))));
   }
-  main.append(renderNext() || "");
   main.append(h("details", { class: "add gps" }, h("summary", { text: "今いる場所をその場で記録する（GPS）" }), renderNear()));
 }
