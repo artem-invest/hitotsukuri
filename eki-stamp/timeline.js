@@ -151,18 +151,24 @@ export function dayLines(d) {
 
 // 手段ごとの距離 {train: 12.3, ...}
 // 海の上を走った「車」を船に直す。Googleは小さな船（釣り船など）を乗用車と判定することがある（2026-07-02 本人の実例）
-// isSea(緯度, 経度) は陸から遠い海の上か。移動中の点（両端を含む）の半分以上・3点以上が海なら船とみなす
+// isSea(緯度, 経度) は陸から遠い海の上か（rd.seaTest）。移動中の点（両端を含む）の半分以上・3点以上が海なら船とみなす
 // 半分にしたのは、北海道の山道（天馬街道など）にも陸の手がかりが少ない所があり、そこを一部通る車の移動を船にしないため
+// 同じ場所（約1km四方）の点は1つとして数える。2026-07-02 の実例では66点のうち約30点が沖ノ島の同じ1点で、
+// それを全部数えると「陸」が多数になり、船を見落とした
+export function isBoatLike(d, a, isSea) {
+  const seen = new Map();
+  for (const [la, lo] of [a.a, ...d.pts.filter((p) => p[0] >= a.s && p[0] <= a.e).map((p) => [p[1], p[2]]), a.b]) {
+    const k = `${la.toFixed(2)},${lo.toFixed(2)}`;
+    if (!seen.has(k)) seen.set(k, isSea(la, lo));
+  }
+  const sea = [...seen.values()].filter(Boolean).length;
+  return sea >= 3 && sea * 2 >= seen.size;
+}
 export function fixBoats(days, isSea) {
   const changed = [];
   for (const d of days) {
     let hit = false;
-    for (const a of d.acts) {
-      if (a.mode !== "car") continue;
-      const pts = [a.a, ...d.pts.filter((p) => p[0] >= a.s && p[0] <= a.e).map((p) => [p[1], p[2]]), a.b];
-      const sea = pts.filter((p) => isSea(p[0], p[1])).length;
-      if (sea >= 3 && sea * 2 >= pts.length) { a.mode = "boat"; hit = true; }
-    }
+    for (const a of d.acts) if (a.mode === "car" && isBoatLike(d, a, isSea)) { a.mode = "boat"; hit = true; }
     if (hit) changed.push(d);
   }
   return changed;

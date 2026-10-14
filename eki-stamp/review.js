@@ -1,6 +1,6 @@
 // 年報：1年（と各月）の移動をまとめて振り返る
 // 材料はタイムラインの日ごとの記録（days）とスタンプ（visits）。計算は開いたときにその場で行う。
-import { h, ymd, km } from "./ui.js";
+import { h, ymdw, km } from "./ui.js";
 import * as tl from "./timeline.js";
 import * as rd from "./roads.js";
 
@@ -24,7 +24,7 @@ function dayKm(d, roads) {
 }
 const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
 
-// app: { allDays, stations, visits, roads, master, year, setYear(y), openDay(date) }
+// app: { allDays, stations, visits, roads, master, year, setYear(y), mode, setMode(m), openDay(date) }
 export function renderReview(main, app) {
   const { allDays, stations, visits, roads, master } = app;
   if (!allDays.length) {
@@ -86,7 +86,7 @@ export function renderReview(main, app) {
     h("h2", { text: "この年のいちばん" }),
     h("ul", { class: "tops" }, tops.map(([t, date, v]) => h("li", {},
       h("span", { text: t }),
-      h("button", { type: "button", class: "linkish", onclick: () => app.openDay(date), text: ymd(date + "T12:00") }),
+      h("button", { type: "button", class: "linkish", onclick: () => app.openDay(date), text: ymdw(date) }),
       h("b", { text: v })))),
     topSt.length ? h("p", { class: "muted", text: `よく乗り降りした駅：${topSt.map(([n, c]) => `${n}（${c}回）`).join("・")}` }) : null));
 
@@ -98,20 +98,30 @@ export function renderReview(main, app) {
     for (const [mode, v] of Object.entries(k)) cur[mode] = (cur[mode] || 0) + v;
     byMonth.set(m, cur);
   }
-  const maxKm = Math.max(...[...byMonth.values()].map(sum), 1);
+  // 手段で絞る（車＝高速＋一般道）。「すべて」は色分けの積み上げ
+  const pick = { all: null, train: ["train"], car: ["hw", "general", "car"], walk: ["walk"], bike: ["bike"], bus: ["bus"], boat: ["boat"] };
+  const names = { all: "すべて", train: "電車", car: "車", walk: "徒歩", bike: "自転車", bus: "バス", boat: "船" };
+  const has = (keys) => [...byMonth.values()].some((k) => keys.some((x) => k[x] > 0));
+  const modes = Object.keys(pick).filter((m) => m === "all" || has(pick[m]));
+  const mode = modes.includes(app.mode) ? app.mode : "all";
+  const val = (k) => (mode === "all" ? sum(k) : pick[mode].reduce((a, x) => a + (k[x] || 0), 0));
+  const maxKm = Math.max(...[...byMonth.values()].map(val), 1);
   const newByMonth = (m) => newOnes.filter((s) => firstAt.get(s.id).slice(0, 7) === m);
   main.append(h("section", { class: "card" },
     h("h2", { text: "月ごと" }),
+    h("div", { class: "seg small" }, modes.map((m) => h("button", { type: "button", "aria-pressed": String(m === mode), text: names[m], onclick: () => app.setMode(m) }))),
     h("ol", { class: "months" }, [...byMonth.entries()].sort().map(([m, k]) => {
       const nw = newByMonth(m);
+      const bars = mode === "all"
+        ? ORDER.filter((x) => k[x] > 0).map((x) => h("i", { style: `width:${(k[x] / maxKm) * 100}%;background:${color(x)}` }))
+        : pick[mode].filter((x) => k[x] > 0).map((x) => h("i", { style: `width:${(k[x] / maxKm) * 100}%;background:${color(x)}` }));
       return h("li", {},
         h("span", { class: "mo", text: `${+m.slice(5)}月` }),
-        h("span", { class: "stack", title: ORDER.filter((x) => k[x]).map((x) => `${label(x)} ${km(k[x])}km`).join(" ／ ") },
-          ORDER.filter((x) => k[x] > 0).map((x) => h("i", { style: `width:${(k[x] / maxKm) * 100}%;background:${color(x)}` }))),
-        h("span", { class: "tot", text: `${km(sum(k))}km` }),
-        nw.length ? h("small", { text: `初めて：${nw.slice(0, 6).map((s) => s.name).join("・")}${nw.length > 6 ? ` ほか${nw.length - 6}` : ""}` }) : null);
+        h("span", { class: "stack", title: ORDER.filter((x) => k[x]).map((x) => `${label(x)} ${km(k[x])}km`).join(" ／ ") }, bars),
+        h("span", { class: "tot", text: `${km(val(k))}km` }),
+        mode === "all" && nw.length ? h("small", { text: `初めて：${nw.slice(0, 6).map((s) => s.name).join("・")}${nw.length > 6 ? ` ほか${nw.length - 6}` : ""}` }) : null);
     })),
-    h("p", { class: "muted", text: "棒の色：電車＝赤・高速＝濃い青・一般道＝薄い青・徒歩＝緑。タイムラインの記録が無い日は数えていません。" })));
+    h("p", { class: "muted", text: mode === "all" ? "棒の色：電車＝赤・高速＝濃い青・一般道＝薄い青・徒歩＝緑・船＝青緑。上の年を切り替えると、過去の年の月ごとも見られます。" : `${names[mode]}だけの距離。上の年を切り替えると、過去の年の月ごとも見られます。` })));
 }
 
 function stat(label, n, unit) {

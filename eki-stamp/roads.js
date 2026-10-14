@@ -196,17 +196,23 @@ export function hwPasses(r, routes, days) {
   return out;
 }
 
-// 陸から遠い海の上か（船の見分けに使う）。駅・施設・高速道路のどれも、周り約10〜20km（0.1度のマス目とその隣）に無ければ海
-// 東京湾の中や港の近くは陸になる（アクアラインや沿岸の道を船と取り違えないため）
-export function seaTest(master, r) {
-  const land = new Set();
-  const k = (la, lo) => `${Math.floor(la * 10)},${Math.floor(lo * 10)}`;
-  for (const m of master) for (const p of m.pts) land.add(k(p[1], p[0]));
-  for (const s of r.spots) land.add(k(s.lat, s.lng));
-  for (const cell of r.grid.keys()) { const [x, y] = cell.split(",").map(Number); land.add(k((x + 0.5) * CELL, (y + 0.5) * CELL)); }
+// 陸から遠い海の上か（船の見分けに使う）。陸地は land.json（Natural Earth の陸地を0.1度＝約10kmのマス目にしたもの。tools/build_land.py）
+// そのマスが陸でなければ海。海岸線を含むマスは陸なので、海沿いの道はかならず陸になる。
+// 橋（アクアラインなど）は一部が海のマスに入るが、移動の点の半分以上が海でないと船にしないので車のまま
+// 2.7.0 は「駅・施設・高速が無い所＝海」としていたため、鉄道の無い宮古島の中のドライブが船になった（3.0.0 で陸地の形に変えた）
+let landLoading = null;
+export function loadLand() {
+  landLoading ||= fetch("./land.json")
+    .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then((d) => ({ ...d, bytes: Uint8Array.from(atob(d.bits), (c) => c.charCodeAt(0)) }))
+    .catch((e) => { landLoading = null; throw e; });
+  return landLoading;
+}
+export function seaTest(land) {
   return (la, lo) => {
-    const x = Math.floor(la * 10), y = Math.floor(lo * 10);
-    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) if (land.has(`${x + i},${y + j}`)) return false;
-    return true;
+    const r = Math.floor((la - land.lat0) / land.step), c = Math.floor((lo - land.lng0) / land.step);
+    if (r < 0 || c < 0 || r >= land.rows || c >= land.cols) return false; // 日本の外は判定しない
+    const i = r * land.cols + c;
+    return !((land.bytes[i >> 3] >> (i & 7)) & 1);
   };
 }

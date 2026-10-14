@@ -8,6 +8,9 @@ export const ROADCOLORS = { hw: "#1d3f8f", general: "#79a6e8" };
 let map = null;
 
 // car：roads.splitCar の結果（無ければ車も1色で描く）
+// 地図の大きさが変わったとき（全画面の切り替えなど）に描き直させる
+export const refreshMap = () => map?.invalidateSize();
+
 export function drawDay(el, day, stamps, car = null) {
   const L = window.L;
   if (!L) { el.textContent = "地図の部品を読み込めませんでした。"; return; }
