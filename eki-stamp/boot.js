@@ -7,7 +7,7 @@ export function boot(step) {
     const log = JSON.parse(sessionStorage.getItem("eki.bootlog.cur") || "[]");
     log.push(`${step} ${ms}ms`);
     sessionStorage.setItem("eki.bootlog.cur", JSON.stringify(log));
-    localStorage.setItem("eki.bootlog", JSON.stringify(log.slice(-30)));
+    localStorage.setItem("eki.bootlog", JSON.stringify(log.slice(-60)));
   } catch {}
   const m = document.getElementById("main");
   const p = m && m.querySelector(".empty");

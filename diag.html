@@ -19,10 +19,12 @@ li{margin:3px 0;word-break:break-all}
 <body>
 <h1>あしあと帳の診断</h1>
 <p class="muted">記録は書き換えません。終わったら（または途中で止まったら）この画面のスクリーンショットを送ってください。</p>
+<div style="background:#fffdf8;border:1px solid #ddd3c2;border-radius:10px;padding:8px 12px;margin:8px 0"><b>前回アプリが進んだところ</b><div id="prev" class="muted"></div></div>
 <button id="go" type="button">診断する</button>
 <ol id="log"></ol>
 <script>
 const ol = document.getElementById("log");
+try { const pl = JSON.parse(localStorage.getItem("eki.bootlog") || "[]"); document.getElementById("prev").textContent = pl.length ? pl.slice(-12).join(" → ") : "記録なし"; } catch (x) { document.getElementById("prev").textContent = "読めない"; }
 const t0 = performance.now();
 const pause = () => new Promise((r) => setTimeout(r, 30)); // 1行ずつ画面に出す
 async function step(name, fn) {

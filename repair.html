@@ -76,11 +76,16 @@ document.getElementById("save").onclick = async (e) => {
     }), 20000);
     const name = `ashiato-backup-${new Date().toISOString().slice(0, 10)}.json`;
     const file = new File([JSON.stringify(data)], name, { type: "application/json" });
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({ files: [file], title: name });
-    } else {
+    // 共有はボタンを押した直後でないと断られることがある（読み出しに時間がかかると断られる）。そのときは「ダウンロード」に保存する
+    let how = "ダウンロードに保存";
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: name }); how = "共有"; }
+      else throw new Error("共有できない");
+    } catch (err) {
+      if (err && err.name === "AbortError") { log("共有を取りやめました"); e.target.disabled = false; return; }
       const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = name; document.body.appendChild(a); a.click(); a.remove();
     }
+    log(`保存のしかた：${how}（ダウンロードなら、スマホの「ファイル」→「ダウンロード」に ${name}）`);
     log(`書き出しました：駅・施設 ${data.stations?.length ?? 0}・記録 ${data.visits?.length ?? 0}・道のり ${data.days?.length ?? 0}日（${Math.round(file.size / 1024)}KB）`);
   } catch (err) { log("書き出せませんでした：" + (err.message || err)); }
   e.target.disabled = false;

@@ -11,7 +11,7 @@ import { renderReview } from "./review.js";
 import { renderLife } from "./life.js";
 import { lineStyle } from "./linestyle.js";
 
-const APP_VERSION = "2.3.0";
+const APP_VERSION = "2.3.1";
 boot("app.js開始");
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
@@ -78,9 +78,11 @@ async function load() {
   }
   boot("記録を読んだ");
   visits = all.filter((v) => !v.pending);
-  pending = all.filter((v) => v.pending).sort((a, b) => b.at.localeCompare(a.at));
+  pending = all.filter((v) => v.pending).sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+  boot("設定を読む");
   meta.lastExport = await db.getMeta("lastExport");
   life = (await db.getMeta("life")) || { places: [], candidates: [] };
+  boot("日付の一覧を読む");
   dayKeys = (await db.getAllKeys("days")).sort();
   boot("画面を作る");
   allDays = null;
@@ -409,6 +411,10 @@ async function importJson(file) {
 
 /* ---------- 画面 ---------- */
 function render() {
+  boot(`描く:${tab}`);
+  try { renderBody(); } finally { boot(`描いた:${tab}`); }
+}
+function renderBody() {
   document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === tab)));
   const went = stations.filter((s) => visitsOf(s.id).length);
   const spots = went.filter(isSpot).length;
@@ -962,9 +968,20 @@ if ("serviceWorker" in navigator) {
       h("button", { type: "button", class: "primary", text: "もう一度読む", onclick: () => location.reload() })));
     return;
   }
+  boot("保存の確保");
   meta.persisted = await askPersist().catch(() => "unsupported");
   if (tab === "backup") render();
-  try { master = await geo.loadMaster(); await linkMaster(); render(); await loadRides(); render(); } catch {}
-  try { await recheckSpotsOnce(); render(); await backfillSpots(); await recheckStationsOnce(); render(); } catch {}
-  if (await geo.permitted()) findNear(); // 許可済みなら、開いたときに自動で探す
+  try {
+    boot("駅データ"); master = await geo.loadMaster();
+    boot("駅を結びつける"); await linkMaster(); render();
+    boot("通った区間"); await loadRides(); render();
+  } catch (e) { boot("失敗:" + (e?.message || e)); }
+  try {
+    boot("施設の見直し"); await recheckSpotsOnce(); render();
+    boot("施設のさかのぼり"); await backfillSpots();
+    boot("駅の見直し"); await recheckStationsOnce(); render();
+  } catch (e) { boot("失敗:" + (e?.message || e)); }
+  boot("現在地の確認");
+  if (await geo.permitted()) { boot("近くの駅を探す"); findNear(); }
+  boot("起動おわり");
 })();
