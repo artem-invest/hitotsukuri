@@ -102,6 +102,9 @@ document.getElementById("go").onclick = async (e) => {
     }
     throw new Error("20秒たっても「読み込んでいます」のまま");
   });
+  await step("もう一度、駅と記録を読む（ほかが使用中か）", () => Promise.race([
+    idb(async (db) => { const [a, b] = await Promise.all([all(db, "stations"), all(db, "visits")]); return `読めた（${a.length}・${b.length}）`; }),
+    new Promise((_, ng) => setTimeout(() => ng(new Error("5秒待っても読めない＝ほかの画面が書き込み中のまま")), 5000))]));
   await step("アプリがどこまで進んだか", async () => { try { return JSON.parse(localStorage.getItem("eki.bootlog") || "[]").join(" → ") || "目印なし（app.js が動き始めていない）"; } catch (x) { return "読めない"; } });
   const li = document.createElement("li");
   li.textContent = `終わり（全部で${Math.round((performance.now() - t0) / 1000)}秒）`;

@@ -48,6 +48,31 @@ export function openDB() {
   return dbPromise;
 }
 
+// つなぎ直す：読み出しが待たされたまま進まないときに使う
+export function reconnect() {
+  const p = dbPromise;
+  dbPromise = null;
+  if (p) p.then((d) => d.close(), () => {});
+}
+
+// いくつかの表を1回で読む。ms 以内に終わらなければ「待たされている」として失敗にする
+// （2026-10-14 スマホでだけ、駅と記録の読み出しが終わらずに止まった。ほかの画面が書き込みの途中で一時停止していると、
+//   データベースが読み出しを待たせ続ける。黙って止まらず、つなぎ直しと案内ができるようにする）
+export async function readAll(stores, ms) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(Object.assign(new Error("待たされている"), { busy: true })), ms);
+    const tx = db.transaction(stores, "readonly");
+    const out = {};
+    for (const s of stores) {
+      const r = tx.objectStore(s).getAll();
+      r.onsuccess = () => { out[s] = r.result; boot(`${s} を読んだ`); };
+    }
+    tx.oncomplete = () => { clearTimeout(timer); resolve(out); };
+    tx.onerror = tx.onabort = () => { clearTimeout(timer); reject(tx.error); };
+  });
+}
+
 const result = (req) => new Promise((resolve, reject) => {
   req.onsuccess = () => resolve(req.result);
   req.onerror = () => reject(req.error);

@@ -11,7 +11,7 @@ import { renderReview } from "./review.js";
 import { renderLife } from "./life.js";
 import { lineStyle } from "./linestyle.js";
 
-const APP_VERSION = "2.2.2";
+const APP_VERSION = "2.2.3";
 boot("app.js開始");
 const INKS = ["#d0472f", "#3f6fc4", "#3a9a62", "#9a5bb3", "#c7772a"]; // スタンプのインク（明暗どちらの地でも読める中間の濃さ）
 
@@ -64,7 +64,18 @@ const visitsOf = (id) => visits.filter((v) => v.stationId === id).sort((a, b) =>
 async function load() {
   let all;
   boot("記録を読む");
-  [stations, all] = await Promise.all([db.getAll("stations"), db.getAll("visits")]);
+  // 待たされたら、つなぎ直して2回まで読み直す。だめなら案内を出す
+  for (let tries = 1; ; tries++) {
+    try {
+      const r = await db.readAll(["stations", "visits"], 3000);
+      [stations, all] = [r.stations, r.visits];
+      break;
+    } catch (e) {
+      if (!e.busy || tries >= 3) throw e.busy ? new Error("ほかの画面が記録を使ったまま止まっています") : e;
+      boot(`待たされたのでつなぎ直す（${tries}回目）`);
+      db.reconnect();
+    }
+  }
   boot("記録を読んだ");
   visits = all.filter((v) => !v.pending);
   pending = all.filter((v) => v.pending).sort((a, b) => b.at.localeCompare(a.at));
@@ -940,7 +951,15 @@ if ("serviceWorker" in navigator) {
     boot("最初の画面が出た");
   } catch (e) {
     boot("起動で失敗：" + (e?.message || e));
-    $("#main").replaceChildren(h("p", { class: "empty", text: `記録を読み込めませんでした（${e?.message || e}）。` }));
+    const busy = String(e?.message || "").includes("ほかの画面");
+    $("#main").replaceChildren(h("section", { class: "card" },
+      h("h2", { text: busy ? "記録がほかの画面に使われたまま止まっています" : "記録を読み込めませんでした" }),
+      busy ? h("ol", { class: "steps" },
+        h("li", { text: "スマホの「最近使ったアプリ」を開き、あしあと帳とChromeを上にスワイプして全部閉じる" }),
+        h("li", { text: "それでも同じなら、スマホを再起動する" }),
+        h("li", { text: "あしあと帳だけを開く（Chromeのタブでは開かない）" })) : h("p", { text: String(e?.message || e) }),
+      h("p", { class: "muted", text: "記録は消えていません。" }),
+      h("button", { type: "button", class: "primary", text: "もう一度読む", onclick: () => location.reload() })));
     return;
   }
   meta.persisted = await askPersist().catch(() => "unsupported");
